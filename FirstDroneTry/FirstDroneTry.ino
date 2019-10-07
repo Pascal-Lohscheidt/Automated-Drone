@@ -45,7 +45,7 @@ int heightOffset;
 
 //==== Settings ====
 int minThrottle = 250;
-int maxThrottle = 400; //350 good testing value  <->  900 flightable
+int maxThrottle = 700; //350 good testing value  <->  900 flightable
 
 bool stopThrottle = false;
 
@@ -54,7 +54,7 @@ float xAngleSetPoint = 0;
 float yAngleSetPoint = 0;
 float zAngleSetPoint = 0;
 
-float xVectorSetPoint = 0 ;
+float xVectorSetPoint = 0;
 float yVectorSetPoint = 0;
 
 float heightSetPoint = 2; //height in cm
@@ -62,11 +62,19 @@ float heightSetPoint = 2; //height in cm
 //======== PID Settings =========
 float heightIFaktor = 0.045;
 
-float zAnglePFaktor = 30;//6 was best //16
-float zAngleIFaktor = 0.08; //0.04
+float zAnglePFaktor = 3.5;
+float zAngleIFaktor = 0.004; //0.04
+float zAngleDFaktor = 6;
 
-float xyAnglePFaktor = 0.2; //16
-float xyAngleIFaktor = 0.000; //0.001
+float xyMovePFaktor = 3; //16
+float xyMoveIFaktor = 0.00; //0.001
+float xyMoveDFaktor = 0; //0.001
+
+float xyAnglePFaktor = 4; //6
+float xyAngleIFaktor = 0.016; //0.001
+float xyAngleDFaktor = 5; // 5
+
+
 
 //float accJitterFactor = 40;
 
@@ -136,7 +144,7 @@ float finalValueYaw; //bad idea?
 struct PIDSavings {
   int lastYValue = 0;
   int lastDifValue = 0;
-  long lastTimer = 0;
+  long lastTimer = -1;
   double iSum = 0; // integral sum
 };
 
@@ -144,6 +152,9 @@ struct PIDSavings heightSavings;
 struct PIDSavings xSavings;
 struct PIDSavings ySavings;
 struct PIDSavings zSavings;
+
+struct PIDSavings xMoveSavings;
+struct PIDSavings yMoveSavings;
 
 
 struct Vector3 {
@@ -270,7 +281,7 @@ void loop() {
 
   setThrottleForAll(minThrottle);
 
-  //handleYawStablelisation();
+  handleYawStablelisation();
 
   handleAutoHover();
 
@@ -342,12 +353,12 @@ void handleRadioReceive()
 
 void handleHeightThrottle()
 {
-  setThrottleForAll(minThrottle + ApplyPID(currentHeight, heightSetPoint, &heightSavings, 1, heightIFaktor, 0.1));
+  setThrottleForAll(minThrottle + ApplyPID(currentHeight, heightSetPoint, &heightSavings, 2, heightIFaktor, 0));
 }
 
 void handleYawStablelisation()
 {
-  float angleAdjustThrust = ApplyPID(currentZRotation, zAngleSetPoint, &zSavings, zAnglePFaktor, zAngleIFaktor, 0.2);
+  float angleAdjustThrust = ApplyPID(currentZRotation, zAngleSetPoint, &zSavings, zAnglePFaktor, zAngleIFaktor, zAngleDFaktor);
   //A-D B-C
 
   throttleA += angleAdjustThrust;
@@ -358,13 +369,23 @@ void handleYawStablelisation()
 
 void handleAutoHover()
 {
-  int x = -ApplyPID(moveVector.x, xVectorSetPoint, &xSavings, xyAnglePFaktor, xyAngleIFaktor, 1);
-  int y = -ApplyPID(moveVector.y, yVectorSetPoint, &ySavings, xyAnglePFaktor, xyAngleIFaktor, 1);
+  int xMove = -ApplyPID(moveVector.x, xVectorSetPoint, &xMoveSavings, xyMovePFaktor, xyMoveIFaktor, xyMoveDFaktor);
+  int yMove = -ApplyPID(moveVector.y, yVectorSetPoint, &yMoveSavings, xyAnglePFaktor, xyAngleIFaktor, xyMoveDFaktor);
+
+  int xRot = ApplyPID(currentXRotation, xAngleSetPoint, &xSavings, xyAnglePFaktor, xyAngleIFaktor, xyAngleDFaktor);
+  int yRot = ApplyPID(currentYRotation, yAngleSetPoint, &ySavings, xyAnglePFaktor, xyAngleIFaktor, xyAngleDFaktor);
+
+  int x = 0.0 * xMove + 1 * -yRot;
+  int y = 0.0 * yMove + 1 * xRot; 
 
   throttleA += (x + y);
   throttleB += (-x + y);
   throttleC += (x - y);
   throttleD += (-x - y);
+
+  Serial.print(currentXRotation);
+  Serial.print("\t");
+  Serial.println(currentYRotation);
 
   //int x = ApplyPID(currentXRotation, xAngleSetPoint, &xSavings, xyAnglePFaktor, xyAngleIFaktor, 1);
   //int y = ApplyPID(currentYRotation, yAngleSetPoint, &ySavings, xyAnglePFaktor, xyAngleIFaktor, 1);
@@ -455,7 +476,7 @@ void calculateFlightVector()
 {
 
   struct Vector3 filterG;
-  filterG.z = 1;
+  filterG.z = -1;
 
   //rolls at x & pitches with y
 
@@ -465,15 +486,15 @@ void calculateFlightVector()
   moveVector.y = accYOutput;
   moveVector.z = accZOutput;
 
-   Serial.print(moveVector.x);
-  Serial.print("\t");
-  Serial.println(moveVector.y );
+//  Serial.print(moveVector.x);
+//  Serial.print("\t");
+//  Serial.println(moveVector.y );
   
   //==filtering vector
 
-  moveVector.x -= filterG.x;
-  moveVector.y -= filterG.y;
-  moveVector.z -= filterG.z;
+//  moveVector.x -= filterG.x;
+//  moveVector.y -= filterG.y;
+//  moveVector.z -= filterG.z;
 
   //ApplyEulerMatrix(&filterG, -angleRollOutput, -anglePitchOutput, -angleYawOutput);
 }
@@ -522,9 +543,9 @@ void evaluateIMUData()
   angleYawOutput = angleYawOutput * 0.9 + angleYawGyro * 0.1;
 
 
-  accXOutput = accXOutput * 0.99995 + ((accX) - accXcal) * 0.00005;
-  accYOutput = accYOutput * 0.995 + ((accY) - accYcal) * 0.00005;
-  accZOutput = accZOutput * 0.995 + ((accZ) - accZcal) * 0.00005;
+  accXOutput = accXOutput * 0.995 + ((accX) - accXcal) * 0.005;
+  accYOutput = accYOutput * 0.995 + ((accY) - accYcal) * 0.005;
+  accZOutput = accZOutput * 0.995 + ((accZ) - accZcal) * 0.005;
 
   //angle_pitch_output = angle_pitch;
   //angle_roll_output = angle_roll;
@@ -598,12 +619,15 @@ void ApplyEulerMatrix(struct Vector3 *vector, float x, float y, float z)
 //===== PID =======
 float ApplyPID(float y, float yo, struct PIDSavings *savings, float pk, float ik, float dk) {
 
-  float finalValue = pk * (yo - y); //declaring final value and applying the potential part
+  float delta = (yo - y);
+  float finalValue = pk * delta; //declaring final value and applying the potential part
 
-  savings->iSum += ik * (yo - y); //adding up the integral part
+  savings->iSum += ik * delta; //adding up the integral part
   finalValue += savings->iSum; // applying the integral part
 
-  //missing D Part
+  finalValue += dk * (delta / (micros() / 3560 - savings->lastTimer));
+
+  savings->lastTimer = micros();
 
   return finalValue;
 }
