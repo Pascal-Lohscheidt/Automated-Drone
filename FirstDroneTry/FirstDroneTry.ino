@@ -40,7 +40,7 @@ Data data;
 
 int triggerPin = 30;
 int echoPin = 31;
-int heightOffset;
+float heightOffset;
 
 
 //==== Settings ====
@@ -60,19 +60,19 @@ float yVectorSetPoint = 0;
 float heightSetPoint = 2; //height in cm
 
 //======== PID Settings =========
-float heightIFaktor = 0.045;
+float heightIFaktor = 0.09; //0.045
 
 float zAnglePFaktor = 3.5;
 float zAngleIFaktor = 0.004; //0.04
-float zAngleDFaktor = 6;
+float zAngleDFaktor = 45;
 
 float xyMovePFaktor = 3; //16
 float xyMoveIFaktor = 0.00; //0.001
 float xyMoveDFaktor = 0; //0.001
 
-float xyAnglePFaktor = 4; //6
-float xyAngleIFaktor = 0.016; //0.001
-float xyAngleDFaktor = 5; // 5
+float xyAnglePFaktor = 0.4; //1.3 //4
+float xyAngleIFaktor = 0.02 ;  // 0.05 //0.016
+float xyAngleDFaktor = 90; //15 // 5
 
 
 
@@ -283,7 +283,8 @@ void loop() {
 
   handleYawStablelisation();
 
-  handleAutoHover();
+  if(currentHeight > 0.05) handleAutoHover(); // only applying the PID logic if it´s higher than that
+  
 
   limitThrottle();//important to limit all throttle values
   applyThrottle();
@@ -291,10 +292,10 @@ void loop() {
 
 //==== Echo Methods =====
 
-int getDistance(int triggerPort, int echoPort)
+float getDistance(int triggerPort, int echoPort)
 {
-  int distance;
-  int deltaTime;
+  float distance;
+  float deltaTime;
 
   digitalWrite(triggerPort, LOW);
   delayMicroseconds(3);
@@ -387,6 +388,15 @@ void handleAutoHover()
   Serial.print("\t");
   Serial.println(currentYRotation);
 
+//  Serial.print(throttleA);
+//  Serial.print("\t");
+//  Serial.print(throttleB);
+//  Serial.print("\t");
+//  Serial.print(throttleC);
+//  Serial.print("\t");
+//  Serial.println(throttleD);
+
+  
   //int x = ApplyPID(currentXRotation, xAngleSetPoint, &xSavings, xyAnglePFaktor, xyAngleIFaktor, 1);
   //int y = ApplyPID(currentYRotation, yAngleSetPoint, &ySavings, xyAnglePFaktor, xyAngleIFaktor, 1);
   //  throttleA += (-x + y);
