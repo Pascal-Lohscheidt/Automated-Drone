@@ -70,9 +70,9 @@ float xyMovePFaktor = 3; //16
 float xyMoveIFaktor = 0.00; //0.001
 float xyMoveDFaktor = 0; //0.001
 
-float xyAnglePFaktor = 0.4; //1.3 //4
-float xyAngleIFaktor = 0.02 ;  // 0.05 //0.016
-float xyAngleDFaktor = 90; //15 // 5
+float xyAnglePFaktor = 3.5; //0.4
+float xyAngleIFaktor = 0.06 ; //0.02
+float xyAngleDFaktor = 90; //90
 
 
 
@@ -192,17 +192,17 @@ void setup() {
   gyroZcal /= 2000;                                                  //Divide the gyro_z_cal variable by 2000 to get the avarage offset
 
 
-//  for (int cal_int = 0; cal_int < 2000 ; cal_int ++) {                 //Run this code 2000 times
-//    read_MPU_data();                                              //Read the raw acc and gyro data from the MPU-6050
-//    accXcal += accX;
-//    accYcal += accY;
-//    accZcal += accZ;
-//    delay(3);                                                       //Delay 3us to simulate the 250Hz program loop
-//  }
-//
-//  accXcal /= 2000;
-//  accYcal /= 2000;
-//  accZcal /= 2000;
+  //  for (int cal_int = 0; cal_int < 2000 ; cal_int ++) {                 //Run this code 2000 times
+  //    read_MPU_data();                                              //Read the raw acc and gyro data from the MPU-6050
+  //    accXcal += accX;
+  //    accYcal += accY;
+  //    accZcal += accZ;
+  //    delay(3);                                                       //Delay 3us to simulate the 250Hz program loop
+  //  }
+  //
+  //  accXcal /= 2000;
+  //  accYcal /= 2000;
+  //  accZcal /= 2000;
 
 
   //===== Echo Setup ===
@@ -283,8 +283,8 @@ void loop() {
 
   handleYawStablelisation();
 
-  if(currentHeight > 0.05) handleAutoHover(); // only applying the PID logic if it´s higher than that
-  
+  if (currentHeight > 0.09) handleAutoHover(); // only applying the PID logic if it´s higher than that
+
 
   limitThrottle();//important to limit all throttle values
   applyThrottle();
@@ -377,7 +377,7 @@ void handleAutoHover()
   int yRot = ApplyPID(currentYRotation, yAngleSetPoint, &ySavings, xyAnglePFaktor, xyAngleIFaktor, xyAngleDFaktor);
 
   int x = 0.0 * xMove + 1 * -yRot;
-  int y = 0.0 * yMove + 1 * xRot; 
+  int y = 0.0 * yMove + 1 * xRot;
 
   throttleA += (x + y);
   throttleB += (-x + y);
@@ -388,15 +388,15 @@ void handleAutoHover()
   Serial.print("\t");
   Serial.println(currentYRotation);
 
-//  Serial.print(throttleA);
-//  Serial.print("\t");
-//  Serial.print(throttleB);
-//  Serial.print("\t");
-//  Serial.print(throttleC);
-//  Serial.print("\t");
-//  Serial.println(throttleD);
+  //  Serial.print(throttleA);
+  //  Serial.print("\t");
+  //  Serial.print(throttleB);
+  //  Serial.print("\t");
+  //  Serial.print(throttleC);
+  //  Serial.print("\t");
+  //  Serial.println(throttleD);
 
-  
+
   //int x = ApplyPID(currentXRotation, xAngleSetPoint, &xSavings, xyAnglePFaktor, xyAngleIFaktor, 1);
   //int y = ApplyPID(currentYRotation, yAngleSetPoint, &ySavings, xyAnglePFaktor, xyAngleIFaktor, 1);
   //  throttleA += (-x + y);
@@ -496,15 +496,15 @@ void calculateFlightVector()
   moveVector.y = accYOutput;
   moveVector.z = accZOutput;
 
-//  Serial.print(moveVector.x);
-//  Serial.print("\t");
-//  Serial.println(moveVector.y );
-  
+  //  Serial.print(moveVector.x);
+  //  Serial.print("\t");
+  //  Serial.println(moveVector.y );
+
   //==filtering vector
 
-//  moveVector.x -= filterG.x;
-//  moveVector.y -= filterG.y;
-//  moveVector.z -= filterG.z;
+  //  moveVector.x -= filterG.x;
+  //  moveVector.y -= filterG.y;
+  //  moveVector.z -= filterG.z;
 
   //ApplyEulerMatrix(&filterG, -angleRollOutput, -anglePitchOutput, -angleYawOutput);
 }
