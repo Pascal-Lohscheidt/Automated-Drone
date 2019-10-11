@@ -45,7 +45,7 @@ float heightOffset;
 
 //==== Settings ====
 int minThrottle = 250;
-int maxThrottle = 700; //350 good testing value  <->  900 flightable
+int maxThrottle = 1100; //350 good testing value  <->  900 flightable
 
 bool stopThrottle = false;
 
@@ -57,23 +57,24 @@ float zAngleSetPoint = 0;
 float xVectorSetPoint = 0;
 float yVectorSetPoint = 0;
 
-float heightSetPoint = 2; //height in cm
+float heightSetPoint = 3; //height in cm
 
 //======== PID Settings =========
 float heightIFaktor = 0.09; //0.045
 
-float zAnglePFaktor = 3.5;
-float zAngleIFaktor = 0.004; //0.04
-float zAngleDFaktor = 45;
+float zAnglePFaktor = 0.2;
+float zAngleIFaktor = 0.01; //0.04
+float zAngleDFaktor = 40;
 
 float xyMovePFaktor = 3; //16
 float xyMoveIFaktor = 0.00; //0.001
 float xyMoveDFaktor = 0; //0.001
 
-float xyAnglePFaktor = 0.4; //1.3 //4
-float xyAngleIFaktor = 0.02 ;  // 0.05 //0.016
-float xyAngleDFaktor = 90; //15 // 5
+float xyAnglePFaktor = 0.3;//0.4 //3
+float xyAngleIFaktor = 0.03; //0.02 //0.035
+float xyAngleDFaktor = 10.5; //90
 
+bool IblockedWithHeight = true; 
 
 
 //float accJitterFactor = 40;
@@ -192,17 +193,17 @@ void setup() {
   gyroZcal /= 2000;                                                  //Divide the gyro_z_cal variable by 2000 to get the avarage offset
 
 
-//  for (int cal_int = 0; cal_int < 2000 ; cal_int ++) {                 //Run this code 2000 times
-//    read_MPU_data();                                              //Read the raw acc and gyro data from the MPU-6050
-//    accXcal += accX;
-//    accYcal += accY;
-//    accZcal += accZ;
-//    delay(3);                                                       //Delay 3us to simulate the 250Hz program loop
-//  }
-//
-//  accXcal /= 2000;
-//  accYcal /= 2000;
-//  accZcal /= 2000;
+  //  for (int cal_int = 0; cal_int < 2000 ; cal_int ++) {                 //Run this code 2000 times
+  //    read_MPU_data();                                              //Read the raw acc and gyro data from the MPU-6050
+  //    accXcal += accX;
+  //    accYcal += accY;
+  //    accZcal += accZ;
+  //    delay(3);                                                       //Delay 3us to simulate the 250Hz program loop
+  //  }
+  //
+  //  accXcal /= 2000;
+  //  accYcal /= 2000;
+  //  accZcal /= 2000;
 
 
   //===== Echo Setup ===
@@ -281,10 +282,19 @@ void loop() {
 
   setThrottleForAll(minThrottle);
 
+  if(currentHeight > 1) IblockedWithHeight = false;
+  
   handleYawStablelisation();
 
-  if(currentHeight > 0.05) handleAutoHover(); // only applying the PID logic if it´s higher than that
-  
+  handleAutoHover();
+
+  Serial.print(currentHeight);
+  Serial.print("\t");
+  Serial.print(currentXRotation);
+  Serial.print("\t");
+  Serial.print(currentYRotation);
+  Serial.print("\t");
+  Serial.println(currentZRotation);
 
   limitThrottle();//important to limit all throttle values
   applyThrottle();
@@ -354,12 +364,12 @@ void handleRadioReceive()
 
 void handleHeightThrottle()
 {
-  setThrottleForAll(minThrottle + ApplyPID(currentHeight, heightSetPoint, &heightSavings, 2, heightIFaktor, 0));
+  setThrottleForAll(minThrottle + ApplyPID(currentHeight, heightSetPoint, &heightSavings, 2, heightIFaktor, 0, false));
 }
 
 void handleYawStablelisation()
 {
-  float angleAdjustThrust = ApplyPID(currentZRotation, zAngleSetPoint, &zSavings, zAnglePFaktor, zAngleIFaktor, zAngleDFaktor);
+  float angleAdjustThrust = ApplyPID(currentZRotation, zAngleSetPoint, &zSavings, zAnglePFaktor, zAngleIFaktor, zAngleDFaktor, true);
   //A-D B-C
 
   throttleA += angleAdjustThrust;
@@ -370,33 +380,29 @@ void handleYawStablelisation()
 
 void handleAutoHover()
 {
-  int xMove = -ApplyPID(moveVector.x, xVectorSetPoint, &xMoveSavings, xyMovePFaktor, xyMoveIFaktor, xyMoveDFaktor);
-  int yMove = -ApplyPID(moveVector.y, yVectorSetPoint, &yMoveSavings, xyAnglePFaktor, xyAngleIFaktor, xyMoveDFaktor);
+  int xMove = -ApplyPID(moveVector.x, xVectorSetPoint, &xMoveSavings, xyMovePFaktor, xyMoveIFaktor, xyMoveDFaktor, true);
+  int yMove = -ApplyPID(moveVector.y, yVectorSetPoint, &yMoveSavings, xyAnglePFaktor, xyAngleIFaktor, xyMoveDFaktor, true);
 
-  int xRot = ApplyPID(currentXRotation, xAngleSetPoint, &xSavings, xyAnglePFaktor, xyAngleIFaktor, xyAngleDFaktor);
-  int yRot = ApplyPID(currentYRotation, yAngleSetPoint, &ySavings, xyAnglePFaktor, xyAngleIFaktor, xyAngleDFaktor);
+  int xRot = ApplyPID(currentXRotation, xAngleSetPoint, &xSavings, xyAnglePFaktor, xyAngleIFaktor, xyAngleDFaktor, true);
+  int yRot = ApplyPID(currentYRotation, yAngleSetPoint, &ySavings, xyAnglePFaktor, xyAngleIFaktor, xyAngleDFaktor, true);
 
   int x = 0.0 * xMove + 1 * -yRot;
-  int y = 0.0 * yMove + 1 * xRot; 
+  int y = 0.0 * yMove + 1 * xRot;
 
   throttleA += (x + y);
   throttleB += (-x + y);
   throttleC += (x - y);
   throttleD += (-x - y);
 
-  Serial.print(currentXRotation);
-  Serial.print("\t");
-  Serial.println(currentYRotation);
+  //  Serial.print(throttleA);
+  //  Serial.print("\t");
+  //  Serial.print(throttleB);
+  //  Serial.print("\t");
+  //  Serial.print(throttleC);
+  //  Serial.print("\t");
+  //  Serial.println(throttleD);
 
-//  Serial.print(throttleA);
-//  Serial.print("\t");
-//  Serial.print(throttleB);
-//  Serial.print("\t");
-//  Serial.print(throttleC);
-//  Serial.print("\t");
-//  Serial.println(throttleD);
 
-  
   //int x = ApplyPID(currentXRotation, xAngleSetPoint, &xSavings, xyAnglePFaktor, xyAngleIFaktor, 1);
   //int y = ApplyPID(currentYRotation, yAngleSetPoint, &ySavings, xyAnglePFaktor, xyAngleIFaktor, 1);
   //  throttleA += (-x + y);
@@ -430,6 +436,11 @@ void setThrottleForAll(int throttle)
   throttleB = throttle;
   throttleC = throttle;
   throttleD = throttle;
+}
+
+float getAverageThrottle()
+{
+  return (float)(throttleA + throttleB + throttleC + throttleD) / 4;
 }
 
 void limitThrottle()
@@ -496,15 +507,15 @@ void calculateFlightVector()
   moveVector.y = accYOutput;
   moveVector.z = accZOutput;
 
-//  Serial.print(moveVector.x);
-//  Serial.print("\t");
-//  Serial.println(moveVector.y );
-  
+  //  Serial.print(moveVector.x);
+  //  Serial.print("\t");
+  //  Serial.println(moveVector.y );
+
   //==filtering vector
 
-//  moveVector.x -= filterG.x;
-//  moveVector.y -= filterG.y;
-//  moveVector.z -= filterG.z;
+  //  moveVector.x -= filterG.x;
+  //  moveVector.y -= filterG.y;
+  //  moveVector.z -= filterG.z;
 
   //ApplyEulerMatrix(&filterG, -angleRollOutput, -anglePitchOutput, -angleYawOutput);
 }
@@ -625,19 +636,20 @@ void ApplyEulerMatrix(struct Vector3 *vector, float x, float y, float z)
   vector->z = -sin(y) * vector->x + sin(x) * cos(y) * vector->y + cos(x) * cos(y) * vector->z;
 }
 
-
 //===== PID =======
-float ApplyPID(float y, float yo, struct PIDSavings *savings, float pk, float ik, float dk) {
+float ApplyPID(float y, float yo, struct PIDSavings *savings, float pk, float ik, float dk, bool blockAbleWithHeight) {
 
   float delta = (yo - y);
   float finalValue = pk * delta; //declaring final value and applying the potential part
 
-  savings->iSum += ik * delta; //adding up the integral part
+  if(!blockAbleWithHeight || !IblockedWithHeight)
+    savings->iSum += ik * delta; //adding up the integral part
+    
   finalValue += savings->iSum; // applying the integral part
 
-  finalValue += dk * (delta / (micros() / 3560 - savings->lastTimer));
+  finalValue += dk * (delta / (millis() - savings->lastTimer));
 
-  savings->lastTimer = micros();
+  savings->lastTimer = millis();
 
   return finalValue;
 }
