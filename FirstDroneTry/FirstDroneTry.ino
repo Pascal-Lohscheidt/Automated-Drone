@@ -268,7 +268,6 @@ void loop() {
 
   averageCounter++; // One Counter for all average dampen methods
   handleRadioReceive();
-  handleTranssmission();
 
   //===== Control Loop =====
 
@@ -279,6 +278,7 @@ void loop() {
   {
     evaluateIMUData();
     loopTimer = micros();
+    //handleTranssmission();
   }
 
   //=== Define Rotation values ===
@@ -586,8 +586,8 @@ void evaluateIMUData()
   }
 
   //To dampen the pitch and roll angles a complementary filter is used
-  anglePitchOutput = anglePitchOutput * 0.995 + anglePitchGyro * 0.005;   //Take 90% of the output pitch value and add 10% of the raw pitch value
-  angleRollOutput = angleRollOutput * 0.995 + angleRollGyro * 0.005;      //Take 90% of the output roll value and add 10% of the raw roll value
+  anglePitchOutput = anglePitchOutput * 0.85 + anglePitchGyro * 0.15;   //Take 90% of the output pitch value and add 10% of the raw pitch value
+  angleRollOutput = angleRollOutput * 0.85 + angleRollGyro * 0.15;      //Take 90% of the output roll value and add 10% of the raw roll value
   angleYawOutput = angleYawOutput * 0.99 + angleYawGyro * 0.01;
 
 
