@@ -19,7 +19,7 @@ volatile byte chan = 2;
 
 //==== NRF24 Settings ====
 RF24 radio(6, 7); // CE, CSN
-const byte address[][6] = {"0"};
+const byte address[][6] = {"0", "1"};
 
 int lastOperation = 0;
 
@@ -35,6 +35,20 @@ struct DataPackage
 
 typedef struct DataPackage Data;
 Data data;
+
+struct TelemetryData
+{
+  float height = 0;
+  float heightGoal = 0;
+  float rollAngle = 0;
+  float pitchAngle = 0;
+  float yawAngle = 0;
+  float batteryVoltage = 0;
+};
+
+typedef struct TelemetryData Telemetry;
+Telemetry tData;
+
 
 //==== Echo settings ===
 
@@ -222,11 +236,10 @@ void setup() {
   Serial.println("\n");
   Serial.println("--NRF24 Radio Setup--");
   radio.begin();
+  radio.openWritingPipe(address[1]);
   radio.openReadingPipe(0, address[0]);
   radio.setPALevel(RF24_PA_HIGH);
   radio.startListening();
-
-
 
   loopTimer = micros();
 
@@ -255,6 +268,7 @@ void loop() {
 
   averageCounter++; // One Counter for all average dampen methods
   handleRadioReceive();
+  handleTranssmission();
 
   //===== Control Loop =====
 
@@ -323,6 +337,19 @@ float getDistance(int triggerPort, int echoPort)
 
 
 //===== NRF24 Methods ====
+
+void handleTranssmission()
+{
+  //This method handles telemtery transmission
+  tData.height = currentHeight;
+  tData.heightGoal = heightSetPoint;
+  tData.rollAngle = currentXRotation;
+  tData.pitchAngle = currentYRotation;
+  tData.yawAngle = currentZRotation;
+  radio.stopListening();
+  radio.write(&tData, sizeof(tData));
+  radio.startListening();
+}
 
 void handleRadioReceive()
 {

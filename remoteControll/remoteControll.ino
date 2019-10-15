@@ -6,7 +6,7 @@
 
 //===== NRF24 settings ======
 RF24 radio(9, 10);
-const byte address[][6] = {"0"};
+const byte address[][6] = {"0", "1"};
 
 //===== OLED stuff =======
 
@@ -57,14 +57,29 @@ struct DataPackage
 typedef struct DataPackage Data;
 Data data;
 
+struct TelemetryData
+{
+  float height = 0;
+  float heightGoal = 0;
+  float rollAngle = 0;
+  float pitchAngle = 0;
+  float yawAngle = 0;
+  float batteryVoltage = 0;
+};
+
+typedef struct TelemetryData Telemetry;
+Telemetry tData;
+
 void setup() {
   Serial.begin(9600);
   Wire.begin();
   //Set up NRF24
   radio.begin();
   radio.openWritingPipe(address[0]);
+  radio.openReadingPipe(0, address[1]);
   radio.setPALevel(RF24_PA_HIGH);
-  radio.stopListening();
+  //radio.stopListening();
+  radio.startListening();
 
   // Encoder SetUP
   pinMode(dtPort, INPUT);
@@ -99,6 +114,7 @@ void loop() {
   updateDisplay();
   
   handleDataTransmission();
+  handleDataReceive();
 }
 
 void handleJoysticks()
@@ -113,6 +129,7 @@ void handleJoysticks()
 
 void handleDataTransmission()
 {
+  radio.stopListening();
   if (!operationSent)
   {
     operationSent = true;
@@ -124,6 +141,15 @@ void handleDataTransmission()
   }
 
   radio.write(&data, sizeof(data));
+  radio.startListening();
+}
+
+void handleDataReceive()
+{
+  if (radio.available())
+  {
+    radio.read(&tData, sizeof(tData));
+  }
 }
 
 void isr()
@@ -176,17 +202,33 @@ void updateDisplay()
   display.print(approvedOperation);
   display.println(" sel");
   display.println("____________________");
-  display.print("rX: ");
-  display.println(data.rX);
 
-  display.print("rY: ");
-  display.println(data.rY);
+  display.print("Height ");
+  display.print(tData.height);
+  display.print("| Bty ");
+  display.println(tData.batteryVoltage);
+  
+  display.print("H-Goal ");
+  display.println(tData.heightGoal);
 
-  display.print("lX: ");
-  display.println(data.lX);
+  display.print("roll   ");
+  display.println(tData.rollAngle);
+  display.print("pitch  ");
+  display.println(tData.pitchAngle);
+  display.print("yaw    ");
+  display.println(tData.yawAngle);
 
-  display.print("lY: ");
-  display.println(data.lY);
+//  display.print("rX: ");
+//  display.println(data.rX);
+//
+//  display.print("rY: ");
+//  display.println(data.rY);
+//
+//  display.print("lX: ");
+//  display.println(data.lX);
+//
+//  display.print("lY: ");
+//  display.println(data.lY);
 
   display.display();
 }
