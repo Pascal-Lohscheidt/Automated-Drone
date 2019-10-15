@@ -45,7 +45,7 @@ float heightOffset;
 
 //==== Settings ====
 int minThrottle = 250;
-int maxThrottle = 1100; //350 good testing value  <->  900 flightable
+int maxThrottle = 400; //350 good testing value  <->  900 flightable
 
 bool stopThrottle = false;
 
@@ -62,9 +62,9 @@ float heightSetPoint = 3; //height in cm
 //======== PID Settings =========
 float heightIFaktor = 0.09; //0.045
 
-float zAnglePFaktor = 0.2;
-float zAngleIFaktor = 0.01; //0.04
-float zAngleDFaktor = 40;
+float zAnglePFaktor = 0.1;
+float zAngleIFaktor = 0.001; //0.04
+float zAngleDFaktor = 35;
 
 float xyMovePFaktor = 3; //16
 float xyMoveIFaktor = 0.00; //0.001
@@ -545,12 +545,12 @@ void evaluateIMUData()
   angleRollAcc = asin((float)accY / accTotalVector) * 57.296;     //Calculate the roll angle
 
   //Place the MPU-6050 spirit level and note the values in the following two lines for calibration
-  anglePitchAcc -= 0.0;                                              //Accelerometer calibration value for pitch
-  angleRollAcc -= 0.0;                                               //Accelerometer calibration value for roll
+  anglePitchAcc -= -2.30;                                              //Accelerometer calibration value for pitch
+  angleRollAcc -= -0.49;                                               //Accelerometer calibration value for roll
 
   if (set_gyro_angles) {                                               //If the IMU is already started
-    anglePitchGyro = anglePitchGyro * 0.95 + anglePitchAcc * 0.05;     //Correct the drift of the gyro pitch angle with the accelerometer pitch angle 0.9996 0.000
-    angleRollGyro = angleRollGyro * 0.95 + angleRollAcc * 0.05;        //Correct the drift of the gyro roll angle with the accelerometer roll angle
+    anglePitchGyro = anglePitchGyro * 0.995 + anglePitchAcc * 0.005;     //Correct the drift of the gyro pitch angle with the accelerometer pitch angle 0.9996 0.000
+    angleRollGyro = angleRollGyro * 0.995 + angleRollAcc * 0.005;        //Correct the drift of the gyro roll angle with the accelerometer roll angle
   }
   else {                                                               //At first start
     anglePitchGyro = anglePitchAcc;                                     //Set the gyro pitch angle equal to the accelerometer pitch angle
@@ -559,9 +559,9 @@ void evaluateIMUData()
   }
 
   //To dampen the pitch and roll angles a complementary filter is used
-  anglePitchOutput = anglePitchOutput * 0.9 + anglePitchGyro * 0.1;   //Take 90% of the output pitch value and add 10% of the raw pitch value
-  angleRollOutput = angleRollOutput * 0.9 + angleRollGyro * 0.1;      //Take 90% of the output roll value and add 10% of the raw roll value
-  angleYawOutput = angleYawOutput * 0.9 + angleYawGyro * 0.1;
+  anglePitchOutput = anglePitchOutput * 0.995 + anglePitchGyro * 0.005;   //Take 90% of the output pitch value and add 10% of the raw pitch value
+  angleRollOutput = angleRollOutput * 0.995 + angleRollGyro * 0.005;      //Take 90% of the output roll value and add 10% of the raw roll value
+  angleYawOutput = angleYawOutput * 0.99 + angleYawGyro * 0.01;
 
 
   accXOutput = accXOutput * 0.995 + ((accX) - accXcal) * 0.005;
