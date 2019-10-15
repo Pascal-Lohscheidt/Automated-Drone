@@ -59,7 +59,7 @@ float heightOffset;
 
 //==== Settings ====
 int minThrottle = 250;
-int maxThrottle = 400; //350 good testing value  <->  900 flightable
+int maxThrottle = 700; //350 good testing value  <->  900 flightable
 
 bool stopThrottle = false;
 
@@ -77,18 +77,22 @@ float heightSetPoint = 3; //height in cm
 float heightIFaktor = 0.09; //0.045
 
 float zAnglePFaktor = 0.1;
-float zAngleIFaktor = 0.001; //0.04
+float zAngleIFaktor = 0.000; //0.04
 float zAngleDFaktor = 35;
 
 float xyMovePFaktor = 3; //16
 float xyMoveIFaktor = 0.00; //0.001
 float xyMoveDFaktor = 0; //0.001
 
-float xyAnglePFaktor = 0.3;//0.4 //3
+float xyAnglePFaktor = 4;//0.4 //3
 float xyAngleIFaktor = 0.03; //0.02 //0.035
-float xyAngleDFaktor = 10.5; //90
+float xyAngleDFaktor = 2; //90
 
 bool IblockedWithHeight = true; 
+
+//==== PID variables =====
+long pidTimer = 0;
+float pidInterval = 1250; //mircoS 1 / 800 -> 800hz
 
 
 //float accJitterFactor = 40;
@@ -236,7 +240,7 @@ void setup() {
   Serial.println("\n");
   Serial.println("--NRF24 Radio Setup--");
   radio.begin();
-  radio.openWritingPipe(address[1]);
+  //radio.openWritingPipe(address[1]);
   radio.openReadingPipe(0, address[0]);
   radio.setPALevel(RF24_PA_HIGH);
   radio.startListening();
@@ -278,7 +282,6 @@ void loop() {
   {
     evaluateIMUData();
     loopTimer = micros();
-    //handleTranssmission();
   }
 
   //=== Define Rotation values ===
@@ -291,17 +294,19 @@ void loop() {
 
   calculateFlightVector();
 
+  if(micros() - pidTimer > pidInterval)
+  { 
+    pidTimer = micros();
+    //handleHeightThrottle();
 
-  //handleHeightThrottle();
+    setThrottleForAll(minThrottle);
 
-  setThrottleForAll(minThrottle);
-
-  if(currentHeight > 1) IblockedWithHeight = false;
+    if(currentHeight > 1) IblockedWithHeight = false;
   
-  handleYawStablelisation();
+    handleYawStablelisation();
 
-  handleAutoHover();
-
+    handleAutoHover();
+  }
   Serial.print(currentHeight);
   Serial.print("\t");
   Serial.print(currentXRotation);
@@ -391,12 +396,12 @@ void handleRadioReceive()
 
 void handleHeightThrottle()
 {
-  setThrottleForAll(minThrottle + ApplyPID(currentHeight, heightSetPoint, &heightSavings, 2, heightIFaktor, 0, false));
+  setThrottleForAll(minThrottle + ApplyPID(currentHeight, heightSetPoint, &heightSavings, 2, heightIFaktor, 0, false, 600));
 }
 
 void handleYawStablelisation()
 {
-  float angleAdjustThrust = ApplyPID(currentZRotation, zAngleSetPoint, &zSavings, zAnglePFaktor, zAngleIFaktor, zAngleDFaktor, true);
+  float angleAdjustThrust = ApplyPID(currentZRotation, zAngleSetPoint, &zSavings, zAnglePFaktor, zAngleIFaktor, zAngleDFaktor, true, 2);
   //A-D B-C
 
   throttleA += angleAdjustThrust;
@@ -407,11 +412,11 @@ void handleYawStablelisation()
 
 void handleAutoHover()
 {
-  int xMove = -ApplyPID(moveVector.x, xVectorSetPoint, &xMoveSavings, xyMovePFaktor, xyMoveIFaktor, xyMoveDFaktor, true);
-  int yMove = -ApplyPID(moveVector.y, yVectorSetPoint, &yMoveSavings, xyAnglePFaktor, xyAngleIFaktor, xyMoveDFaktor, true);
+  int xMove = -ApplyPID(moveVector.x, xVectorSetPoint, &xMoveSavings, xyMovePFaktor, xyMoveIFaktor, xyMoveDFaktor, true, 7);
+  int yMove = -ApplyPID(moveVector.y, yVectorSetPoint, &yMoveSavings, xyAnglePFaktor, xyAngleIFaktor, xyMoveDFaktor, true, 7);
 
-  int xRot = ApplyPID(currentXRotation, xAngleSetPoint, &xSavings, xyAnglePFaktor, xyAngleIFaktor, xyAngleDFaktor, true);
-  int yRot = ApplyPID(currentYRotation, yAngleSetPoint, &ySavings, xyAnglePFaktor, xyAngleIFaktor, xyAngleDFaktor, true);
+  int xRot = ApplyPID(currentXRotation, xAngleSetPoint, &xSavings, xyAnglePFaktor, xyAngleIFaktor, xyAngleDFaktor, true, 7);
+  int yRot = ApplyPID(currentYRotation, yAngleSetPoint, &ySavings, xyAnglePFaktor, xyAngleIFaktor, xyAngleDFaktor, true, 7);
 
   int x = 0.0 * xMove + 1 * -yRot;
   int y = 0.0 * yMove + 1 * xRot;
@@ -443,11 +448,11 @@ void handleAutoHover()
 void fireUpEngines()
 {
   Serial.println("Fire up Engines!!");
-  for (int i = 1; i <= 700; i++)
+  for (int i = 1; i <= 800; i++)
   {
     Serial.print("Engine boost: ");
     Serial.println(i);
-    setThrottleForAll(minThrottle + 100);
+    setThrottleForAll(minThrottle + 150);
     limitThrottle();
     applyThrottle();
     delay(1);
@@ -586,9 +591,9 @@ void evaluateIMUData()
   }
 
   //To dampen the pitch and roll angles a complementary filter is used
-  anglePitchOutput = anglePitchOutput * 0.85 + anglePitchGyro * 0.15;   //Take 90% of the output pitch value and add 10% of the raw pitch value
-  angleRollOutput = angleRollOutput * 0.85 + angleRollGyro * 0.15;      //Take 90% of the output roll value and add 10% of the raw roll value
-  angleYawOutput = angleYawOutput * 0.99 + angleYawGyro * 0.01;
+  anglePitchOutput = anglePitchOutput * 0.9 + anglePitchGyro * 0.1;   //Take 90% of the output pitch value and add 10% of the raw pitch value
+  angleRollOutput = angleRollOutput * 0.9 + angleRollGyro * 0.1;      //Take 90% of the output roll value and add 10% of the raw roll value
+  angleYawOutput = angleYawOutput * 0.9 + angleYawGyro * 0.1;
 
 
   accXOutput = accXOutput * 0.995 + ((accX) - accXcal) * 0.005;
@@ -664,13 +669,15 @@ void ApplyEulerMatrix(struct Vector3 *vector, float x, float y, float z)
 }
 
 //===== PID =======
-float ApplyPID(float y, float yo, struct PIDSavings *savings, float pk, float ik, float dk, bool blockAbleWithHeight) {
+float ApplyPID(float y, float yo, struct PIDSavings *savings, float pk, float ik, float dk, bool blockAbleWithHeight, float maxISum) {
 
   float delta = (yo - y);
   float finalValue = pk * delta; //declaring final value and applying the potential part
 
   if(!blockAbleWithHeight || !IblockedWithHeight)
     savings->iSum += ik * delta; //adding up the integral part
+
+  savings->iSum = minMaxTheValue(maxISum, savings->iSum);
     
   finalValue += savings->iSum; // applying the integral part
 
@@ -681,6 +688,13 @@ float ApplyPID(float y, float yo, struct PIDSavings *savings, float pk, float ik
   return finalValue;
 }
 
+float minMaxTheValue(float maxV, float value)
+{
+  value = value > maxV ? maxV : value;
+  value = value < -maxV ? -maxV : value;
+
+  return value;
+}
 
 float dampenWithAverage(float addValue, float *averageSum, float *finalValue)
 {
