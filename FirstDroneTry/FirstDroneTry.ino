@@ -76,7 +76,7 @@ float zAngleSetPoint = 0;
 float xVectorSetPoint = 0;
 float yVectorSetPoint = 0;
 
-float heightSetPoint = 10; //height in cm
+float heightSetPoint = 2; //height in cm
 
 //======== PID Settings =========
 float heightIFaktor = 0.01; //0.09//0.045
