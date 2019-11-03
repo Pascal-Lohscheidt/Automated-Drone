@@ -20,7 +20,12 @@ volatile byte chan = 2;
 //==== Loop settings
 
 long imuTimer = 0;
+long deltaTime = 0;
 
+//==== Echo sensor Settings ====
+
+bool sentEchoAlready = false;
+long lastTimeEchoSent = 0;
 
 //==== NRF24 Settings ====
 RF24 radio(6, 7); // CE, CSN
@@ -128,10 +133,12 @@ long gyroXcal, gyroYcal, gyroZcal;
 long accXcal, accYcal, accZcal;
 
 long loopTimer;
+bool setUpDone = false;
 
 long accLoopTimer;
 double accXAverageSum;
 double accYAverageSum;
+double accZAverageSum;
 float finalAccX;
 float finalAccY;
 int accAverageSumCounter = 0;
@@ -145,7 +152,7 @@ float anglePitchOutput, angleRollOutput, angleYawOutput;
 float accXOutput, accYOutput, accZOutput;
 
 //====== Average Filter =====
-int averageCounterMax = 30;
+int averageCounterMax = 10;
 int averageCounter = 0;
 
 float averageSumVectorX;
@@ -231,6 +238,7 @@ void setup() {
   //  accYcal /= 2000;
   //  accZcal /= 2000;
 
+  setUpDone = true;
 
   //===== Echo Setup ===
   Serial.println("\n");
@@ -282,7 +290,6 @@ unsigned int CreateBitSignal(unsigned int throttle)
 void loop() {
 
   //loopTimer = micros();
-  averageCounter++; // One Counter for all average dampen methods
   handleRadioReceive();
 
   
@@ -304,7 +311,7 @@ void loop() {
   //===== Control Loop =====
   //Serial.println(currentHeight);
 
-  currentHeight = currentHeight * 0.85 + (getDistance(triggerPin, echoPin) - heightOffset) * 0.15;
+  //currentHeight = currentHeight * 0.85 + (getDistance(triggerPin, echoPin) - heightOffset) * 0.15;
   
   
   //=== Define Rotation values ===
@@ -350,6 +357,9 @@ void loop() {
   //Serial.println((long)(micros() - loopTimer));
 }
 
+
+
+
 //==== Echo Methods =====
 
 float getDistance(int triggerPort, int echoPort)
@@ -370,6 +380,39 @@ float getDistance(int triggerPort, int echoPort)
   distance = deltaTime / 29.1; // Zeit in Zentimeter umrechnen
   return (distance);
 }
+
+
+float getHeightOfEcho(int triggerPort, int echoPort)
+{
+  //====== Creating the fixed Echo Pulse=========
+  if(!sentEchoAlready)
+  {
+    sentEchoAlready = true;
+    digitalWrite(triggerPort, LOW);
+    delayMicroseconds(3);
+    noInterrupts();
+    digitalWrite(triggerPort, HIGH); //Trigger Impuls 10 us
+    lastTimeEchoSent = micros();
+    delayMicroseconds(10);
+    interrupts();
+    digitalWrite(triggerPort, LOW);
+  }
+  else if(digitalRead(echoPort) == LOW)
+  {
+    sentEchoAlready = false;
+    float deltaTime = micros() - lastTimeEchoSent;
+    deltaTime /= 2; // Zeit halbieren
+    float distance = deltaTime / 29.1; // Zeit in Zentimeter umrechnen
+    return distance;
+  }
+
+  return currentHeight;
+  
+}
+
+
+
+
 
 
 //===== NRF24 Methods ====
@@ -420,6 +463,9 @@ void handleRadioReceive()
     //    Serial.println(data.lY);
   }
 }
+
+
+
 
 
 //======= autonomous methods =========
@@ -473,6 +519,10 @@ void handleAutoHover()
   //  throttleC += (x + y);
   //  throttleD += (x - y);
 }
+
+
+
+
 
 //========== Throttle Steering ============
 
@@ -554,6 +604,8 @@ void applyThrottle()
   interrupts();
 }
 
+
+
 // ========= Gyro Evaluation methods ===========
 
 void calculateFlightVector()
@@ -593,10 +645,13 @@ void evaluateIMUData()
 
   //Gyro angle calculations
   //0.0000611 = 1 / (250Hz / 65.5)
-  anglePitchGyro += gyroY * 0.0000611;                                   //Calculate the traveled pitch angle and add this to the angle_pitch variable
-  angleRollGyro += gyroX * 0.0000611;                                    //Calculate the traveled roll angle and add this to the angle_roll variable
-  angleYawGyro += gyroZ * 0.0000611;
+  
+  float nv = 1 / ((1000000 / micros() - deltaTime) / 65.5)
+  anglePitchGyro += gyroY * nv;                                   //Calculate the traveled pitch angle and add this to the angle_pitch variable
+  angleRollGyro += gyroX * nv;                                    //Calculate the traveled roll angle and add this to the angle_roll variable
+  angleYawGyro += gyroZ * nv;
 
+  deltaTime = micros();
   //0.000001066 = 0.0000611 * (3.142(PI) / 180degr) The Arduino sin function is in radians
   anglePitchGyro -= anglePitchGyro * sin(gyroZ * 0.000001066);               //If the IMU has yawed transfer the roll angle to the pitch angel
   angleRollGyro += angleRollGyro * sin(gyroZ * 0.000001066);               //If the IMU has yawed transfer the pitch angle to the roll angel
@@ -609,9 +664,9 @@ void evaluateIMUData()
   angleYawOutput = angleYawOutput * 0.90 + angleYawGyro * 0.1;
 
 
-  accXOutput = accXOutput * 0.995 + ((accX) - accXcal) * 0.005;
-  accYOutput = accYOutput * 0.995 + ((accY) - accYcal) * 0.005;
-  accZOutput = accZOutput * 0.995 + ((accZ) - accZcal) * 0.005;
+//  accXOutput = accXOutput * 0.995 + ((accX) - accXcal) * 0.005;
+//  accYOutput = accYOutput * 0.995 + ((accY) - accYcal) * 0.005;
+//  accZOutput = accZOutput * 0.995 + ((accZ) - accZcal) * 0.005;
 
   //angle_pitch_output = angle_pitch;
   //angle_roll_output = angle_roll;
@@ -632,8 +687,8 @@ void calibrateGyroAngles()
   angleRollAcc -= -0.49;                                               //Accelerometer calibration value for roll
 
   if (set_gyro_angles) {                                               //If the IMU is already started
-    anglePitchGyro = anglePitchGyro * 0.9995 + anglePitchAcc * 0.0005;     //Correct the drift of the gyro pitch angle with the accelerometer pitch angle 0.9996 0.000
-    angleRollGyro = angleRollGyro * 0.9995 + angleRollAcc * 0.0005;        //Correct the drift of the gyro roll angle with the accelerometer roll angle
+    anglePitchGyro = anglePitchGyro * 0.995 + anglePitchAcc * 0.005;     //Correct the drift of the gyro pitch angle with the accelerometer pitch angle 0.9996 0.000
+    angleRollGyro = angleRollGyro * 0.995 + angleRollAcc * 0.005;        //Correct the drift of the gyro roll angle with the accelerometer roll angle
   }
   else {                                                               //At first start
     anglePitchGyro = anglePitchAcc;                                     //Set the gyro pitch angle equal to the accelerometer pitch angle
@@ -675,6 +730,11 @@ void read_MPU_data() {                                            //Subroutine f
   gyroZ = Wire.read() << 8 | Wire.read();                             //Add the low and high byte to the gyro_z variable
 }
 
+
+
+
+
+
 //===== Secure Functions ====
 
 void stopEngines()
@@ -705,6 +765,12 @@ void ApplyEulerMatrix(struct Vector3 *vector, float x, float y, float z)
   vector->z = -sin(y) * vector->x + sin(x) * cos(y) * vector->y + cos(x) * cos(y) * vector->z;
 }
 
+
+
+
+
+
+
 //===== PID =======
 float ApplyPID(float y, float yo, struct PIDSavings *savings, float pk, float ik, float dk, bool blockAbleWithHeight, float maxISum) {
 
@@ -733,7 +799,7 @@ float minMaxTheValue(float maxV, float value)
   return value;
 }
 
-float dampenWithAverage(float addValue, float *averageSum, float *finalValue)
+void dampenWithAverage(float addValue, double *averageSum, float *finalValue)
 {
   if (averageCounter < averageCounterMax)
   {
