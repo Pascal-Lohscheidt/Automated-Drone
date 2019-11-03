@@ -94,9 +94,9 @@ float xyMovePFaktor = 3; //16
 float xyMoveIFaktor = 0.00; //0.001
 float xyMoveDFaktor = 0; //0.001
 
-float xyAnglePFaktor = 0.8;//0.9//0.85;//0.4 //3
+float xyAnglePFaktor = 0.1;//0.9//0.85;//0.4 //3
 float xyAngleIFaktor = 0.015; //0.02 //0.035
-float xyAngleDFaktor = 7;//6.7//6.2//5.5 //90
+float xyAngleDFaktor = 9;//6.7//6.2//5.5 //90
 
 bool IblockedWithHeight = true; 
 float PIDHeightconstantAdjustFaktor = 1;
