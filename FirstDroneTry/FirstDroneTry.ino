@@ -217,7 +217,7 @@ void setup() {
     gyroXcal += gyroX;                                              //Add the gyro x-axis offset to the gyro_x_cal variable
     gyroYcal += gyroY;                                              //Add the gyro y-axis offset to the gyro_y_cal variable
     gyroZcal += gyroZ;                                              //Add the gyro z-axis offset to the gyro_z_cal variable
-    delay(3);                                                       //Delay 3us to simulate the 250Hz program loop
+    delay(4);                                                       //Delay 4ms to simulate the 250Hz program loop
   }
 
   gyroXcal /= 2000;                                                  //Divide the gyro_x_cal variable by 2000 to get the avarage offset
@@ -265,6 +265,7 @@ void setup() {
   loopTimer = micros();
   pidTimer = micros();
   imuTimer = micros();
+  deltaTime = micros();
   
   //=== Engine Setup ===
   fireUpEngines();
@@ -289,27 +290,12 @@ unsigned int CreateBitSignal(unsigned int throttle)
 
 void loop() {
 
-  //loopTimer = micros();
   handleRadioReceive();
 
   
-//  int x = 0.07* (currentHeight);
-//  int fx = x > 1 ? 1 : x;
-//  PIDHeightconstantAdjustFaktor = fx;
   PIDHeightconstantAdjustFaktor = 1;
-//  if(currentHeight < 15)
-//  {
-//    int x = 0.25 * currentHeight;
-//    int fx = -(1 / (x <= 0 ? 0.01 : x)) + 1;
-//    PIDHeightconstantAdjustFaktor =  fx <= 0 ? 0.01 : fx;
-//  }
-//  else
-//  {
-//    PIDHeightconstantAdjustFaktor = 1;
-//  }
   
   //===== Control Loop =====
-  //Serial.println(currentHeight);
 
   //currentHeight = currentHeight * 0.85 + (getDistance(triggerPin, echoPin) - heightOffset) * 0.15;
   
@@ -324,7 +310,6 @@ void loop() {
   
   if(micros() - pidTimer > pidInterval)
   { 
-    //Serial.println(long(micros() - pidTimer));
     pidTimer = micros();
     //handleHeightThrottle();
 
@@ -336,13 +321,13 @@ void loop() {
 
     handleAutoHover();
   }
-  else if (micros() - imuTimer > 2300) // 3560
-  {
-    //Serial.println(long(micros() - imuTimer));
-    evaluateIMUData();
-    imuTimer = micros();
-  }
-  
+ else if (micros() - imuTimer > 4000) // 3560
+ {
+   //Serial.println(long(micros() - imuTimer));
+   evaluateIMUData();
+   imuTimer = micros();
+ }
+
   Serial.print(currentHeight);
   Serial.print("\t");
   Serial.print(currentXRotation);
@@ -644,14 +629,16 @@ void evaluateIMUData()
   gyroZ -= gyroZcal;                                                //Subtract the offset calibration value from the raw gyro_z value
 
   //Gyro angle calculations
-  //0.0000611 = 1 / (250Hz / 65.5)
-  
-  float nv = 1 / ((1000000 / micros() - deltaTime) / 65.5)
+  //0.0000611 = 1 / (250Hz * 65.5)
+  //float nv = 1 / ((1000000 / (micros() - deltaTime)) * 65.5);
+  //double nv = (1/65.5) * ((micros() - deltaTime) / 1000000);
+  double nv = 0.0000611;
   anglePitchGyro += gyroY * nv;                                   //Calculate the traveled pitch angle and add this to the angle_pitch variable
   angleRollGyro += gyroX * nv;                                    //Calculate the traveled roll angle and add this to the angle_roll variable
   angleYawGyro += gyroZ * nv;
 
   deltaTime = micros();
+  
   //0.000001066 = 0.0000611 * (3.142(PI) / 180degr) The Arduino sin function is in radians
   anglePitchGyro -= anglePitchGyro * sin(gyroZ * 0.000001066);               //If the IMU has yawed transfer the roll angle to the pitch angel
   angleRollGyro += angleRollGyro * sin(gyroZ * 0.000001066);               //If the IMU has yawed transfer the pitch angle to the roll angel
@@ -687,8 +674,10 @@ void calibrateGyroAngles()
   angleRollAcc -= -0.49;                                               //Accelerometer calibration value for roll
 
   if (set_gyro_angles) {                                               //If the IMU is already started
-    anglePitchGyro = anglePitchGyro * 0.995 + anglePitchAcc * 0.005;     //Correct the drift of the gyro pitch angle with the accelerometer pitch angle 0.9996 0.000
-    angleRollGyro = angleRollGyro * 0.995 + angleRollAcc * 0.005;        //Correct the drift of the gyro roll angle with the accelerometer roll angle
+    //anglePitchGyro = anglePitchGyro * 0.995 + anglePitchAcc * 0.005;     //Correct the drift of the gyro pitch angle with the accelerometer pitch angle 0.9996 0.000
+    //angleRollGyro = angleRollGyro * 0.995 + angleRollAcc * 0.005;        //Correct the drift of the gyro roll angle with the accelerometer roll angle
+    anglePitchGyro = anglePitchGyro * 1 + anglePitchAcc * 0;     //Correct the drift of the gyro pitch angle with the accelerometer pitch angle 0.9996 0.000
+    anglePitchGyro = anglePitchGyro * 1 + anglePitchAcc * 0;     //Correct the drift of the gyro pitch angle with the accelerometer pitch angle 0.9996 0.000
   }
   else {                                                               //At first start
     anglePitchGyro = anglePitchAcc;                                     //Set the gyro pitch angle equal to the accelerometer pitch angle
@@ -764,8 +753,6 @@ void ApplyEulerMatrix(struct Vector3 *vector, float x, float y, float z)
   vector->y = cos(y) * sin(z) * vector->x + (sin(x) * sin(y) * sin(z) + cos(x) * cos(z)) * vector->y + (cos(x) * sin(y) * sin(z) - sin(x) * cos(z)) * vector->z;
   vector->z = -sin(y) * vector->x + sin(x) * cos(y) * vector->y + cos(x) * cos(y) * vector->z;
 }
-
-
 
 
 
