@@ -35,7 +35,7 @@ int rYOffset;
 int lXOffset;
 int lYOffset;
 
-//===== Rest ===
+//===== Rest =====
 
 int operation = 1; //1-> start; 2-> land; 3-> Emergency Stop; 
 int approvedOperation = 0;

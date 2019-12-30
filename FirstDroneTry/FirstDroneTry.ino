@@ -17,10 +17,11 @@ extern "C"
 volatile unsigned int th = 0;
 volatile byte chan = 2;
 
-//==== Loop settings
+//==== Loop settings ====
 
 long imuTimer = 0;
 long deltaTime = 0;
+long heightControlTimer = 0;
 
 //==== Echo sensor Settings ====
 
@@ -68,8 +69,8 @@ float heightOffset;
 
 
 //==== Settings ====
-int minThrottle = 450; //250 standard
-int maxThrottle = 700; //350 good testing value  <->  900 flightable
+#define MIN_THROTTLE = 450; //250 standard
+#define MAX_THROTTLE = 700; //350 good testing value  <->  900 flightable
 
 bool stopThrottle = false;
 
@@ -96,7 +97,7 @@ float xyMoveDFaktor = 0; //0.001
 
 float xyAnglePFaktor = 0.1;//0.9//0.85;//0.4 //3
 float xyAngleIFaktor = 0.015; //0.02 //0.035
-float xyAngleDFaktor = 9;//6.7//6.2//5.5 //90
+float xyAngleDFaktor = 13;//6.7//6.2//5.5 //90
 
 bool IblockedWithHeight = true; 
 float PIDHeightconstantAdjustFaktor = 1;
@@ -114,6 +115,8 @@ int throttleA; //1 -> pin 8
 int throttleB; //2 -> pin 9
 int throttleC; //3 -> pin 10
 int throttleD; //4 -> pin 11
+
+int heightThrottleAddition = 0;
 
 //===== Drone Info ====
 float currentXRotation;
@@ -292,28 +295,27 @@ void loop() {
 
   handleRadioReceive();
 
-  
+
   PIDHeightconstantAdjustFaktor = 1;
   
   //===== Control Loop =====
 
-  //currentHeight = currentHeight * 0.85 + (getDistance(triggerPin, echoPin) - heightOffset) * 0.15;
-  
-  
   //=== Define Rotation values ===
   currentYRotation = anglePitchOutput;
   currentXRotation = angleRollOutput;
   currentZRotation = angleYawOutput;
+
+  //currentHeight = currentHeight * 0.85 + (getDistance(triggerPin, echoPin) - heightOffset) * 0.15;
   
-  //=== Define move vector values ===
-  //calculateFlightVector();
+  handleHeightControls();
+
   
   if(micros() - pidTimer > pidInterval)
   { 
     pidTimer = micros();
     //handleHeightThrottle();
 
-    setThrottleForAll(minThrottle);
+    setThrottleForAll(MIN_THROTTLE);
 
     if(currentHeight > 1) IblockedWithHeight = false;
   
@@ -321,25 +323,23 @@ void loop() {
 
     handleAutoHover();
   }
- else if (micros() - imuTimer > 4000) // 3560
- {
-   //Serial.println(long(micros() - imuTimer));
-   evaluateIMUData();
-   imuTimer = micros();
- }
+  // else if (micros() - imuTimer > 4000) // 3560
+  // {
+  //   evaluateIMUData();
+  //   imuTimer = micros();
+  // }
 
-  Serial.print(currentHeight);
-  Serial.print("\t");
-  Serial.print(currentXRotation);
-  Serial.print("\t");
-  Serial.print(currentYRotation);
-  Serial.print("\t");
-  Serial.println(currentZRotation);
+  evaluateIMUData();
+
+  // Serial.print(currentXRotation);
+  // Serial.print("\t");
+  // Serial.print(currentYRotation);
+  // Serial.print("\t");
+  // Serial.println(currentZRotation);
+
 
   limitThrottle();//important to limit all throttle values
   applyThrottle();
-
-  //Serial.println((long)(micros() - loopTimer));
 }
 
 
@@ -397,9 +397,6 @@ float getHeightOfEcho(int triggerPort, int echoPort)
 
 
 
-
-
-
 //===== NRF24 Methods ====
 
 void handleTranssmission()
@@ -449,8 +446,17 @@ void handleRadioReceive()
   }
 }
 
+void handleHeightControls()
+{
+  if(millis() - heightControlTimer > 250)
+  {
+    int t = map(data.lY, -512, 512, -3, 3);
+    heightThrottleAddition += t;
+    heightControlTimer = millis();
+  }
+  setThrottleForAll(MIN_THROTTLE + heightThrottleAddition);
 
-
+}
 
 
 //======= autonomous methods =========
@@ -458,7 +464,7 @@ void handleRadioReceive()
 
 void handleHeightThrottle()
 {
-  setThrottleForAll(minThrottle + ApplyPID(currentHeight, heightSetPoint, &heightSavings, 2, heightIFaktor, 0, false, 600));
+  setThrottleForAll(MIN_THROTTLE + ApplyPID(currentHeight, heightSetPoint, &heightSavings, 2, heightIFaktor, 0, false, 600));
 }
 
 void handleYawStablelisation()
@@ -488,13 +494,13 @@ void handleAutoHover()
   throttleC += (x - y);
   throttleD += (-x - y);
 
-  //  Serial.print(throttleA);
-  //  Serial.print("\t");
-  //  Serial.print(throttleB);
-  //  Serial.print("\t");
-  //  Serial.print(throttleC);
-  //  Serial.print("\t");
-  //  Serial.println(throttleD);
+   Serial.print(throttleA);
+   Serial.print("\t");
+   Serial.print(throttleB);
+   Serial.print("\t");
+   Serial.print(throttleC);
+   Serial.print("\t");
+   Serial.println(throttleD);
 
 
   //int x = ApplyPID(currentXRotation, xAngleSetPoint, &xSavings, xyAnglePFaktor, xyAngleIFaktor, 1);
@@ -508,7 +514,6 @@ void handleAutoHover()
 
 
 
-
 //========== Throttle Steering ============
 
 void fireUpEngines()
@@ -518,7 +523,7 @@ void fireUpEngines()
   {
     Serial.print("Engine boost: ");
     Serial.println(i);
-    setThrottleForAll(minThrottle + 150);
+    setThrottleForAll(MIN_THROTTLE + 150);
     limitThrottle();
     applyThrottle();
     delay(1);
@@ -543,15 +548,15 @@ float getAverageThrottle()
 
 void limitThrottle()
 {
-  throttleA = throttleA < minThrottle ? minThrottle : throttleA;
-  throttleB = throttleB < minThrottle ? minThrottle : throttleB;
-  throttleC = throttleC < minThrottle ? minThrottle : throttleC;
-  throttleD = throttleD < minThrottle ? minThrottle : throttleD;
+  throttleA = throttleA < MIN_THROTTLE ? MIN_THROTTLE : throttleA;
+  throttleB = throttleB < MIN_THROTTLE ? MIN_THROTTLE : throttleB;
+  throttleC = throttleC < MIN_THROTTLE ? MIN_THROTTLE : throttleC;
+  throttleD = throttleD < MIN_THROTTLE ? MIN_THROTTLE : throttleD;
 
-  throttleA = throttleA > maxThrottle ? maxThrottle : throttleA;
-  throttleB = throttleB > maxThrottle ? maxThrottle : throttleB;
-  throttleC = throttleC > maxThrottle ? maxThrottle : throttleC;
-  throttleD = throttleD > maxThrottle ? maxThrottle : throttleD;
+  throttleA = throttleA > MAX_THROTTLE ? MAX_THROTTLE : throttleA;
+  throttleB = throttleB > MAX_THROTTLE ? MAX_THROTTLE : throttleB;
+  throttleC = throttleC > MAX_THROTTLE ? MAX_THROTTLE : throttleC;
+  throttleD = throttleD > MAX_THROTTLE ? MAX_THROTTLE : throttleD;
 
   throttleA = abs(throttleA);
   throttleB = abs(throttleB);
@@ -631,8 +636,8 @@ void evaluateIMUData()
   //Gyro angle calculations
   //0.0000611 = 1 / (250Hz * 65.5)
   //float nv = 1 / ((1000000 / (micros() - deltaTime)) * 65.5);
-  //double nv = (1/65.5) * ((micros() - deltaTime) / 1000000);
-  double nv = 0.0000611;
+  double nv = (double)(1/65.5) * ((double)(micros() - deltaTime) / (double)1000000);
+  //double nv = 0.0000611;
   anglePitchGyro += gyroY * nv;                                   //Calculate the traveled pitch angle and add this to the angle_pitch variable
   angleRollGyro += gyroX * nv;                                    //Calculate the traveled roll angle and add this to the angle_roll variable
   angleYawGyro += gyroZ * nv;
@@ -662,7 +667,6 @@ void evaluateIMUData()
 
 void calibrateGyroAngles()
 {
-  
   //Accelerometer angle calculations
   accTotalVector = sqrt((accX * accX) + (accY * accY) + (accZ * accZ)); //Calculate the total accelerometer vector
   //57.296 = 1 / (3.142 / 180) The Arduino asin function is in radians
@@ -674,10 +678,10 @@ void calibrateGyroAngles()
   angleRollAcc -= -0.49;                                               //Accelerometer calibration value for roll
 
   if (set_gyro_angles) {                                               //If the IMU is already started
-    //anglePitchGyro = anglePitchGyro * 0.995 + anglePitchAcc * 0.005;     //Correct the drift of the gyro pitch angle with the accelerometer pitch angle 0.9996 0.000
-    //angleRollGyro = angleRollGyro * 0.995 + angleRollAcc * 0.005;        //Correct the drift of the gyro roll angle with the accelerometer roll angle
-    anglePitchGyro = anglePitchGyro * 1 + anglePitchAcc * 0;     //Correct the drift of the gyro pitch angle with the accelerometer pitch angle 0.9996 0.000
-    anglePitchGyro = anglePitchGyro * 1 + anglePitchAcc * 0;     //Correct the drift of the gyro pitch angle with the accelerometer pitch angle 0.9996 0.000
+    anglePitchGyro = anglePitchGyro * 0.995 + anglePitchAcc * 0.005;     //Correct the drift of the gyro pitch angle with the accelerometer pitch angle 0.9996 0.000
+    angleRollGyro = angleRollGyro * 0.995 + angleRollAcc * 0.005;        //Correct the drift of the gyro roll angle with the accelerometer roll angle
+    // anglePitchGyro = anglePitchGyro * 1 + anglePitchAcc * 0;     //Correct the drift of the gyro pitch angle with the accelerometer pitch angle 0.9996 0.000
+    // anglePitchGyro = anglePitchGyro * 1 + anglePitchAcc * 0;     //Correct the drift of the gyro pitch angle with the accelerometer pitch angle 0.9996 0.000
   }
   else {                                                               //At first start
     anglePitchGyro = anglePitchAcc;                                     //Set the gyro pitch angle equal to the accelerometer pitch angle
