@@ -37,7 +37,7 @@ int lYOffset;
 
 //===== Rest =====
 
-int operation = 1; //1-> start; 2-> land; 3-> Emergency Stop; 
+int operation = 1; //1-> start; 2-> land; 3-> Emergency Stop; 4-> Restart Engines 
 int approvedOperation = 0;
 bool operationSent = true;
 int maxOperationCount = 4;
