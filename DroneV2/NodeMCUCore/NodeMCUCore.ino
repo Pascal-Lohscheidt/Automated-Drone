@@ -1,27 +1,47 @@
 #include <Wire.h> //For I2C comm
+#include <EasyTransferI2C.h>
+
 #include <math.h>
-#include <printf.h>
+// #include <printf.h>
+
 #include <nRF24L01.h>
 #include <RF24_config.h>
 #include <RF24.h>
+
 #include <SPI.h>
 
+//===== Debug Settings =====
+#define showsThrottle false
+#define showsAngles true
 
 //==== Loop settings ====
-
+long pidTimer = 0;
 long imuTimer = 0;
-long deltaTime = 0;
+long evaluateImuTimestamp = 0;
 long heightControlTimer = 0;
+long deltaTime = 0;
 
-//==== Echo sensor Settings ====
+long currentMillisOfCylce; //TODO find out if int is enough for timers to safe speed;
+long currentMicrosOfCylce;
 
-bool sentEchoAlready = false;
-long lastTimeEchoSent = 0;
+//===== I2C Adressing ======
+#define I2C_SLAVE_ADDRESS 9
+
+EasyTransferI2C ET;
+
+struct SEND_DATA_STRUCTURE {
+    int16_t motorStartUpPhase;
+    int16_t throttleA;
+    int16_t throttleB;
+    int16_t throttleC;
+    int16_t throttleD;
+};
+
+SEND_DATA_STRUCTURE nanoPWMData;
 
 //==== NRF24 Settings ====
 RF24 radio(6, 7); // CE, CSN
 const byte address[][6] = {"0", "1"};
-
 int lastOperation = 0;
 
 struct DataPackage
@@ -50,12 +70,9 @@ struct TelemetryData
 typedef struct TelemetryData Telemetry;
 Telemetry tData;
 
-
 //==== Settings ====
-#define MIN_THROTTLE = 450; //250 standard
-#define MAX_THROTTLE = 700; //350 good testing value  <->  900 flightable
-
-bool stopThrottle = false;
+#define MIN_THROTTLE 1050 //250 standard
+#define MAX_THROTTLE 1500 //350 good testing value  <->  900 flightable
 
 //===== Set Points =====
 float xAngleSetPoint = 0;
@@ -67,7 +84,10 @@ float yVectorSetPoint = 0;
 
 float heightSetPoint = 2; //height in cm
 
+
 //======== PID Settings =========
+#define PID_INTERVAL 1250//1250; //us -> 1 / 800 -> 800hz / 1000us -> 1khz
+
 float heightIFaktor = 0.01; //0.09//0.045
 
 float zAnglePFaktor = 0.1;
@@ -84,11 +104,6 @@ float xyAngleDFaktor = 13;//6.7//6.2//5.5 //90
 
 bool IblockedWithHeight = true; 
 float PIDHeightconstantAdjustFaktor = 1;
-
-
-//==== PID variables =====
-long pidTimer = 0;
-int pidInterval = 7000;//1250; //us -> 1 / 800 -> 800hz
 
 
 //float accJitterFactor = 40;
@@ -108,10 +123,11 @@ float currentZRotation;
 
 float currentHeight;
 
+int motorStartUpPhase = 2; //0 = not started ; 1 = should start; 2 started; -1 emergency stop
 
 //===== Gyro variables =======
 
-int gyroX, gyroY, gyroZ;
+int16_t gyroX, gyroY, gyroZ;
 double accX, accY, accZ, accTotalVector;
 int temperature;
 long gyroXcal, gyroYcal, gyroZcal;
@@ -119,7 +135,7 @@ long gyroXcal, gyroYcal, gyroZcal;
 long accXcal, accYcal, accZcal;
 
 long loopTimer;
-bool setUpDone = false;
+bool IMU_SetUpDone = false;
 
 long accLoopTimer;
 double accXAverageSum;
@@ -187,164 +203,140 @@ struct Vector3 moveVector;
 //================= Set Up ====================
 
 void setup() {
-  start();
-  Wire.begin();
   Serial.begin(57600);
   Serial.println("--------------Drone is booting up-------------");
+  Serial.println("--------------Establishing I2C Connection-------------");
+  Wire.setClock(400000); //Must be called before wire begin
+  Wire.begin();
+  delay(1000); // giving rest of the modules time to start up
+
+  ET.begin(details(nanoPWMData), &Wire); //Establish an i2c connection for Arduino
 
   //==== Gyro setup =====
   Serial.println("\n");
   Serial.println("--MPU Setup--");
 
-  setup_MPU_registers();
-
+  handleIMUSetup();
+  Serial.println("--MPU Setup 2--");
   for (int cal_int = 0; cal_int < 2000 ; cal_int ++) {                 //Run this code 2000 times
-    read_MPU_data();                                              //Read the raw acc and gyro data from the MPU-6050
+    readAndCheckIMU();                                              //Read the raw acc and gyro data from the MPU-6050
     gyroXcal += gyroX;                                              //Add the gyro x-axis offset to the gyro_x_cal variable
     gyroYcal += gyroY;                                              //Add the gyro y-axis offset to the gyro_y_cal variable
     gyroZcal += gyroZ;                                              //Add the gyro z-axis offset to the gyro_z_cal variable
-    delay(4);                                                       //Delay 4ms to simulate the 250Hz program loop
+    delayMicroseconds(2500);                                        //Delay 2.5ms to simulate the 400Hz program loop
   }
+  Serial.println("--MPU Setup 3--");
 
   gyroXcal /= 2000;                                                  //Divide the gyro_x_cal variable by 2000 to get the avarage offset
   gyroYcal /= 2000;                                                  //Divide the gyro_y_cal variable by 2000 to get the avarage offset
   gyroZcal /= 2000;                                                  //Divide the gyro_z_cal variable by 2000 to get the avarage offset
 
   calibrateGyroAngles();
-
-  //  for (int cal_int = 0; cal_int < 2000 ; cal_int ++) {                 //Run this code 2000 times
-  //    read_MPU_data();                                              //Read the raw acc and gyro data from the MPU-6050
-  //    accXcal += accX;
-  //    accYcal += accY;
-  //    accZcal += accZ;
-  //    delay(3);                                                       //Delay 3us to simulate the 250Hz program loop
-  //  }
-  //
-  //  accXcal /= 2000;
-  //  accYcal /= 2000;
-  //  accZcal /= 2000;
-
-  setUpDone = true; //this variable just stands for IMU consider renaming it
-
-  //===== Echo Setup ===
-  Serial.println("\n");
-  Serial.println("--Echo sensor Setup--");
-  pinMode(triggerPin, OUTPUT);
-  pinMode(echoPin, INPUT);
-  digitalWrite(triggerPin, HIGH);
-  heightOffset = getDistance(triggerPin, echoPin);
-  currentHeight = 0;
-
-  Serial.println("Height is now zero");
-  Serial.println("------------------\n\n");
-
+  Serial.println("--MPU Setup 4--");
+  IMU_SetUpDone = true; //this variable just stands for IMU consider renaming it
   //===== NRF24 Setup ====
   Serial.println("\n");
   Serial.println("--NRF24 Radio Setup--");
-  radio.begin();
-  //radio.openWritingPipe(address[1]);
-  radio.openReadingPipe(0, address[0]);
-  radio.setPALevel(RF24_PA_HIGH);
-  radio.startListening();
+  // radio.begin();
+  // //radio.openWritingPipe(address[1]);
+  // radio.openReadingPipe(0, address[0]);
+  // radio.setPALevel(RF24_PA_HIGH);
+  // radio.startListening();
 
   //===== Timer Setup ====
   loopTimer = micros();
   pidTimer = micros();
   imuTimer = micros();
   deltaTime = micros();
-  evaluateImuTimestamp = micros();
 
   Serial.println("\n");
   Serial.println("--------------Set up - done-------------");
+  delay(2000);
 }
 
-unsigned int CreateBitSignal(unsigned int throttle)
+void loop()
 {
-  throttle += 48; //adding the 48 to make sure the signal is correct
-  int checksum = 0;
-  int checksumData = throttle * 2;
-  checksum = (checksumData ^ (checksumData >> 4) ^ (checksumData >> 8)) & 0xf;
+  if (micros() - imuTimer >= 2500) // 3560
+  {
+    evaluateIMUData();
+    imuTimer = micros();
+  }
 
-  unsigned int finalSignal = (throttle << 5) + checksum;
-  //Serial.println(finalSignal);
-  return finalSignal;
+  showDebug();
 }
 
 //==================== Main Loop ============================
 
-void loop() {
+// void loop() {
 
-  currentMillisOfCylce = millis();
-  currentMicrosOfCylce = micros(); // maybe for micros that doesn´t work out so well
+//   currentMillisOfCylce = millis();
 
-  Serial.println("Beginn:");
-  Serial.println(currentMicrosOfCylce);
 
-  handleRadioReceive();
+//   // handleRadioReceive();
 
-  Serial.println("After Radio:");
-  Serial.println(micros());
+//   //===== Measure & Control Loop =====
 
-  //===== Measure & Control Loop =====
-
-  if(motorStartUpPhase == 2)
-  {
-    PIDHeightconstantAdjustFaktor = 1;
+//   if(motorStartUpPhase == 2)
+//   {
+//     PIDHeightconstantAdjustFaktor = 1;
    
-    //=== Define Rotation values ===
-    currentYRotation = roundToOneDecimal(anglePitchOutput);
-    currentXRotation = roundToOneDecimal(angleRollOutput);
-    currentZRotation = roundToOneDecimal(angleYawOutput);
+//     //=== Define Rotation values ===
+//     currentYRotation = roundToOneDecimal(anglePitchOutput);
+//     currentXRotation = roundToOneDecimal(angleRollOutput);
+//     currentZRotation = roundToOneDecimal(angleYawOutput);
 
 
-    //currentHeight = currentHeight * 0.85 + (getDistance(triggerPin, echoPin) - heightOffset) * 0.15;
+//     //currentHeight = currentHeight * 0.85 + (getDistance(triggerPin, echoPin) - heightOffset) * 0.15;
 
-    handleHeightControls();
+//     handleHeightControls();
 
-    Serial.println("After Rounding & Height:");
-    Serial.println(micros());
+//     // Serial.println("After Rounding & Height:");
+//     // Serial.println(micros());
 
-    if(currentMicrosOfCylce - pidTimer > PID_INTERVAL) { 
-      pidTimer = currentMicrosOfCylce;
-      //handleHeightThrottle();
+//     currentMicrosOfCylce = micros(); 
+//     if(currentMicrosOfCylce - pidTimer > PID_INTERVAL) 
+//     { 
+//       pidTimer = currentMicrosOfCylce;
+//       //handleHeightThrottle();
 
-      if(currentHeight > 1) IblockedWithHeight = false;
+//       if(currentHeight > 1) IblockedWithHeight = false;
 
-      handleYawStablelisation();
+//       handleYawStablelisation();
 
-      handleAutoHover();
-      Serial.println("After PID:");
-      Serial.println(micros());
+//       handleAutoHover();
+//       // Serial.println("After PID:");
+//       // Serial.println(micros());
 
-    }
-    // else if (micros() - imuTimer > 4000) // 3560
-    // {
-    //   evaluateIMUData();
-    //   imuTimer = micros();
-    // }
+//     }
+    
+//     if (micros() - imuTimer > 2000) // 3560
+//     {
+//       evaluateIMUData();
+//       imuTimer = micros();
+//     }
 
-    evaluateIMUData();
-    Serial.println("After IMU:");
-    Serial.println(micros());
+//     // evaluateIMUData();
+//     // Serial.println("After IMU:");
+//     // Serial.println(micros());
 
 
-    limitThrottle();//important to limit all throttle values
-    applyThrottle();
+//     limitThrottle();//important to limit all throttle values
 
-    Serial.println("End:");
-    Serial.println(micros());
 
-    showDebug();
+//     //===== Send done data to Throttle Handling Nano ======
+//     TransmitDataToNanoRight();
 
-  }
-  else if(motorStartUpPhase == 1)
-  {
-      //=== Engine Setup ===
-      fireUpEngines();
-      applyThrottle();
-  }
-}
+//     // Serial.println("End:");
+//     // Serial.println(micros());
 
+//     showDebug();
+
+//   }
+//   else if(motorStartUpPhase == 1)
+//   {
+//       //=== Engine Setup ===
+//   }
+// }
 
 void showDebug()
 {
@@ -367,6 +359,21 @@ void showDebug()
     Serial.print("\t");
     Serial.println(throttleD);
   }
+}
+
+//====== I2C Methods =====
+
+void TransmitDataToNanoRight()
+{
+  //=== Setting the throttle data ===
+  nanoPWMData.motorStartUpPhase = motorStartUpPhase;
+
+  nanoPWMData.throttleA = throttleA;
+  nanoPWMData.throttleB = throttleB;
+  nanoPWMData.throttleC = throttleC;
+  nanoPWMData.throttleD = throttleD;
+
+  ET.sendData(I2C_SLAVE_ADDRESS);
 }
 
 //===== NRF24 Methods ====
@@ -459,14 +466,6 @@ void handleAutoHover()
   throttleC += (x - y);
   throttleD += (-x - y);
 
-   Serial.print(throttleA);
-   Serial.print("\t");
-   Serial.print(throttleB);
-   Serial.print("\t");
-   Serial.print(throttleC);
-   Serial.print("\t");
-   Serial.println(throttleD);
-
 
   //int x = ApplyPID(currentXRotation, xAngleSetPoint, &xSavings, xyAnglePFaktor, xyAngleIFaktor, 1);
   //int y = ApplyPID(currentYRotation, yAngleSetPoint, &ySavings, xyAnglePFaktor, xyAngleIFaktor, 1);
@@ -505,9 +504,11 @@ void calculateFlightVector()
   //ApplyEulerMatrix(&filterG, -angleRollOutput, -anglePitchOutput, -angleYawOutput);
 }
 
+
+
 void evaluateIMUData()
 {
-  read_MPU_data();                                                //Read the raw acc and gyro data from the MPU-6050
+  readAndCheckIMU();                                             //Read the raw acc and gyro data from the MPU-6050
 
   gyroX -= gyroXcal;                                                //Subtract the offset calibration value from the raw gyro_x value
   gyroY -= gyroYcal;                                                //Subtract the offset calibration value from the raw gyro_y value
@@ -516,8 +517,9 @@ void evaluateIMUData()
   //Gyro angle calculations
   //0.0000611 = 1 / (250Hz * 65.5)
   //float nv = 1 / ((1000000 / (micros() - deltaTime)) * 65.5);
-  double nv = (double)(1/65.5) * ((double)(micros() - deltaTime) / (double)1000000);
-  //double nv = 0.0000611;
+  //double nv = (double)(1/65.5) * ((double)(micros() - deltaTime) / (double)1000000);
+  // double nv = 0.0000611;
+  double nv = 0.0000381; //fixed 400Hz 
   anglePitchGyro += gyroY * nv;                                   //Calculate the traveled pitch angle and add this to the angle_pitch variable
   angleRollGyro += gyroX * nv;                                    //Calculate the traveled roll angle and add this to the angle_roll variable
   angleYawGyro += gyroZ * nv;
@@ -531,9 +533,9 @@ void evaluateIMUData()
   calibrateGyroAngles();
 
   //To dampen the pitch and roll angles a complementary filter is used
-  anglePitchOutput = anglePitchOutput * 0.90 + anglePitchGyro * 0.1;   //Take 90% of the output pitch value and add 10% of the raw pitch value
-  angleRollOutput = angleRollOutput * 0.90 + angleRollGyro * 0.1;      //Take 90% of the output roll value and add 10% of the raw roll value
-  angleYawOutput = angleYawOutput * 0.90 + angleYawGyro * 0.1;
+  anglePitchOutput = anglePitchOutput * 0.99 + anglePitchGyro * 0.01;   //Take 90% of the output pitch value and add 10% of the raw pitch value
+  angleRollOutput = angleRollOutput * 0.99 + angleRollGyro * 0.01;      //Take 90% of the output roll value and add 10% of the raw roll value
+  angleYawOutput = angleYawOutput * 0.99 + angleYawGyro * 0.01;
 
 
 //  accXOutput = accXOutput * 0.995 + ((accX) - accXcal) * 0.005;
@@ -570,59 +572,90 @@ void calibrateGyroAngles()
   }
 }
 
-void setup_MPU_registers() {
-  //Activate the MPU-6050
-  Wire.beginTransmission(0x68);                                        //Start communicating with the MPU-6050
-  Wire.write(0x6B);                                                    //Send the requested starting register
-  Wire.write(0x00);                                                    //Set the requested starting register
-  Wire.endTransmission();                                              //End the transmission
-  //Configure the accelerometer (+/-8g)
-  Wire.beginTransmission(0x68);                                        //Start communicating with the MPU-6050
-  Wire.write(0x1C);                                                    //Send the requested starting register
-  Wire.write(0x10);                                                    //Set the requested starting register
-  Wire.endTransmission();                                              //End the transmission
-  //Configure the gyro (500dps full scale)
-  Wire.beginTransmission(0x68);                                        //Start communicating with the MPU-6050
-  Wire.write(0x1B);                                                    //Send the requested starting register
-  Wire.write(0x08);                                                    //Set the requested starting register
-  Wire.endTransmission();                                              //End the transmission
+void writeOnIMU(uint8_t regAdress, uint8_t data)
+{
+  Wire.beginTransmission(0x68); //Start Com. IMU on given Adress
+  Wire.write(regAdress);
+  Wire.write(data);
+  Wire.endTransmission();
 }
 
-void read_MPU_data() {                                            //Subroutine for reading the raw gyro and accelerometer data
+void readAndCheckIMU()
+{
   Wire.beginTransmission(0x68);                                        //Start communicating with the MPU-6050
   Wire.write(0x3B);                                                    //Send the requested starting register
   Wire.endTransmission();                                              //End the transmission
-  Wire.requestFrom(0x68, 14);                                          //Request 14 bytes from the MPU-6050
+  Wire.requestFrom(0x68, (uint8_t)14);                                          //Request 14 bytes from the MPU-6050
+      Serial.println("--MPU Setup 2.5--");
   while (Wire.available() < 14);                                       //Wait until all the bytes are received
-  accX = Wire.read() << 8 | Wire.read();                              //Add the low and high byte to the acc_x variable
-  accY = Wire.read() << 8 | Wire.read();                              //Add the low and high byte to the acc_y variable
-  accZ = Wire.read() << 8 | Wire.read();                              //Add the low and high byte to the acc_z variable
-  temperature = Wire.read() << 8 | Wire.read();                        //Add the low and high byte to the temperature variable
-  gyroX = Wire.read() << 8 | Wire.read();                             //Add the low and high byte to the gyro_x variable
-  gyroY = Wire.read() << 8 | Wire.read();                             //Add the low and high byte to the gyro_y variable
-  gyroZ = Wire.read() << 8 | Wire.read();                             //Add the low and high byte to the gyro_z variable
+  accX = (double)((Wire.read()<<8) | Wire.read());                             //Add the low and high byte to the acc_x variable
+  accY = (double)((Wire.read()<<8) | Wire.read());                             //Add the low and high byte to the acc_y variable
+  accZ = (double)((Wire.read()<<8) | Wire.read());                             //Add the low and high byte to the acc_z variable
+  temperature = (((int16_t)Wire.read()<<8) | Wire.read());                       //Add the low and high byte to the temperature variable
+  gyroX = (((int16_t)Wire.read()<<8) | Wire.read());                             //Add the low and high byte to the gyro_x variable
+  gyroY = (((int16_t)Wire.read()<<8) | Wire.read());                             //Add the low and high byte to the gyro_y variable
+  gyroZ = (((int16_t)Wire.read()<<8) | Wire.read());                             //Add the low and high byte to the gyro_z variable
 }
+
+void handleIMUSetup()
+{
+  writeOnIMU(0x6B, 0x00); //Handle Initial Starting register
+  writeOnIMU(0x1C, 0x10); //Handle Accel Config
+  writeOnIMU(0x1B, 0x08); //Handle Gyro Config
+}
+
 
 
 //===== Secure Functions ====
 
 void stopEngines()
 {
-  stopThrottle = true;
+  motorStartUpPhase = -1;
   Serial.println("-------------------");
   Serial.println("Throttle stopped!!");
   Serial.println("-------------------");
-
-  //NEW IMPLEMENTATION MISSING
 }
 
 void startEngines()
 {
-  stopThrottle = false;
+  motorStartUpPhase = 1;
   Serial.println("-------------------");
   Serial.println("Engines Started");
   Serial.println("-------------------");
-  //NEW IMPLEMENTATION MISSING
+}
+
+void setThrottleForAll(int throttle)
+{
+  throttleA = throttle;
+  throttleB = throttle;
+  throttleC = throttle;
+  throttleD = throttle;
+}
+
+void limitThrottle()
+{
+  throttleA = throttleA < MIN_THROTTLE ? MIN_THROTTLE : throttleA;
+  throttleB = throttleB < MIN_THROTTLE ? MIN_THROTTLE : throttleB;
+  throttleC = throttleC < MIN_THROTTLE ? MIN_THROTTLE : throttleC;
+  throttleD = throttleD < MIN_THROTTLE ? MIN_THROTTLE : throttleD;
+
+  throttleA = throttleA > MAX_THROTTLE ? MAX_THROTTLE : throttleA;
+  throttleB = throttleB > MAX_THROTTLE ? MAX_THROTTLE : throttleB;
+  throttleC = throttleC > MAX_THROTTLE ? MAX_THROTTLE : throttleC;
+  throttleD = throttleD > MAX_THROTTLE ? MAX_THROTTLE : throttleD;
+
+  throttleA = abs(throttleA);
+  throttleB = abs(throttleB);
+  throttleC = abs(throttleC);
+  throttleD = abs(throttleD);
+
+  if (motorStartUpPhase == -1) //must be called after limitation for saftey reasons
+  {
+    throttleA = 500;
+    throttleB = 500;
+    throttleC = 500;
+    throttleD = 500;
+  }
 }
 
 //===== Apply Eulermatrix ====
@@ -686,7 +719,5 @@ void dampenWithAverage(float addValue, double *averageSum, float *finalValue)
     *finalValue = *averageSum / averageCounterMax;
     averageSum = 0;
   }
-
-  return *finalValue;
 }
 

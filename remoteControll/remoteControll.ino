@@ -1,5 +1,7 @@
-#include <RF24.h>
 #include <SPI.h>
+#include <nRF24L01.h>
+#include <RF24.h>
+#include <RF24_config.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
@@ -14,6 +16,9 @@ const byte address[][6] = {"0", "1"};
 #define SCREEN_HEIGHT 64 // OLED display height, in pixels
 #define OLED_RESET 4
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+//===== Timer ====
+long heightControlTimer = 0;
 
 //===== Encoder =====
 
@@ -46,12 +51,8 @@ int maxOperationCount = 4;
 
 struct DataPackage
 {
-  int operation = 0;
-
-  int rX = 10;
-  int rY = 23;
-  int lX = 27;
-  int lY = -30;
+  uint8_t operation = 0;
+  uint16_t heightAddition = 0;
 };
 
 typedef struct DataPackage Data;
@@ -107,22 +108,36 @@ void setup() {
 }
 
 void loop() {
-  handleJoysticks();
   
   handleEncoderClick();
-  
-  updateDisplay();
-  
+  handleJoysticks();
   handleDataTransmission();
-  handleDataReceive();
+  updateDisplay();  
+  // handleDataReceive();
 }
 
 void handleJoysticks()
 {
-  data.rX = analogRead(0) - rXOffset;
-  data.rY = analogRead(1) - rYOffset;
-  data.lX = analogRead(2) - lXOffset;
-  data.lY = analogRead(3) - lYOffset;
+  // data.rX = analogRead(0) - rXOffset;
+  // data.rY = analogRead(1) - rYOffset;
+  int lx = analogRead(2) - lXOffset;
+  // data.lY = analogRead(3) - lYOffset;
+
+  // if(data.rX < 5 && data.rX > -5) data.rX = 0;
+  // if(data.rY < 5 && data.rY > -5) data.rY = 0;
+  if(lx < 3 && lx > -3) lx = 0;
+  // if(data.lY < 5 && data.lY > -5) data.lY = 0;
+
+  if(millis() - heightControlTimer > 10)
+  {
+    int t = -map(lx, -512, 512, -2, 3); // required because of poti errors
+    data.heightAddition += t;
+    heightControlTimer = millis();
+    if(t < -1) t *= 10; // This is required because i want the motors to faster throttle down than up for safety reasons
+    data.heightAddition = data.heightAddition <= 5 ? 5 : data.heightAddition;
+    data.heightAddition = data.heightAddition > 800 ? 800 : data.heightAddition; 
+  }
+
 
   //btnclicks
 }
@@ -144,13 +159,13 @@ void handleDataTransmission()
   radio.startListening();
 }
 
-void handleDataReceive()
-{
-  if (radio.available())
-  {
-    radio.read(&tData, sizeof(tData));
-  }
-}
+// void handleDataReceive()
+// {
+//   if (radio.available())
+//   {
+//     radio.read(&tData, sizeof(tData));
+//   }
+// }
 
 void isr()
 {
@@ -203,30 +218,30 @@ void updateDisplay()
   display.println(" sel");
   display.println("____________________");
 
-  display.print("Height ");
-  display.print(tData.height);
-  display.print("| Bty ");
-  display.println(tData.batteryVoltage);
+  // display.print("Height ");
+  // display.print(tData.height);
+  // display.print("| Bty ");
+  // display.println(tData.batteryVoltage);
   
-  display.print("H-Goal ");
-  display.println(tData.heightGoal);
+  // display.print("H-Goal ");
+  // display.println(tData.heightGoal);
 
-  display.print("roll   ");
-  display.println(tData.rollAngle);
-  display.print("pitch  ");
-  display.println(tData.pitchAngle);
-  display.print("yaw    ");
-  display.println(tData.yawAngle);
+  // display.print("roll   ");
+  // display.println(tData.rollAngle);
+  // display.print("pitch  ");
+  // display.println(tData.pitchAngle);
+  // display.print("yaw    ");
+  // display.println(tData.yawAngle);
 
 //  display.print("rX: ");
 //  display.println(data.rX);
-//
+
 //  display.print("rY: ");
 //  display.println(data.rY);
-//
-//  display.print("lX: ");
-//  display.println(data.lX);
-//
+
+ display.print("lX: ");
+ display.println(data.heightAddition);
+
 //  display.print("lY: ");
 //  display.println(data.lY);
 

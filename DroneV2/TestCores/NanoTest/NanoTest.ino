@@ -1,51 +1,40 @@
 #include <Wire.h> //For I2C comm
+#include <EasyTransferI2C.h>
 
 //===== I2C Adressing ======
+#define I2C_SLAVE_ADDRESS 9
 
-#define SLAVE_ADRESS 9
-#define ANSWER_SIZE 5
+EasyTransferI2C ET;
 
-String resp = "Fcku!";
+struct SEND_DATA_STRUCTURE {
+    int16_t sex;
+    int16_t doubleSex;
+};
+
+SEND_DATA_STRUCTURE myData;
 
 void setup()
 {
-    Wire.begin(SLAVE_ADRESS); //Slave musst tell adress
+    Wire.begin(I2C_SLAVE_ADDRESS); //Slave musst tell adress
+
+    ET.begin(details(myData), &Wire);
+    
+    Wire.onReceive(receive);
+
     Serial.begin(57600);
     Serial.println("First Test Nano");
-
-    //RequestEvent
-    Wire.onRequest(requestEvent);
-
-    //Wire Receive Event
-    Wire.onReceive(requestEvent);
 }
 
 void loop()
 {    
-    delay(10);
-}
-
-void receiveEvent()
-{
-    while(0 < Wire.available())
+    if(ET.receiveData())
     {
-        byte x = Wire.read();
+        Serial.println(myData.sex);
     }
-    Serial.println("ReceiveEvent");
-}
-
-void requestEvent()
-{
-    byte response[ANSWER_SIZE];
-
-    //Format Answer as array
-    for (byte i = 0; i < ANSWER_SIZE; i++)
-    {
-        response[i] = (byte)resp.charAt(i);
-    }
-    Wire.write(sizeof(response));
-
-    Serial.println("RequestEvent");
     
+}
 
+
+void receive(int numBytes) {
+    Serial.println("hey at least something");
 }

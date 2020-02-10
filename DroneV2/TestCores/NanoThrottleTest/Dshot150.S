@@ -8,10 +8,10 @@
 .global Transmit
 
 start:
-  sbi   DDRA,0  ; Set PA0 as output
-  sbi   DDRA,1  ; Set PA1 as output
-  sbi   DDRA,2  ; Set PA2 as output
-  sbi   DDRA,3  ; Set PA3 as output 
+  sbi   DDRB,0  ; Set PB0 as output
+  sbi   DDRB,1  ; Set PB1 as output
+  sbi   DDRB,2  ; Set PB2 as output
+  sbi   DDRB,3  ; Set PB3 as output 
   ret
 
 Transmit: 
@@ -28,17 +28,20 @@ Transmit:
   ldi r16,0 ; set low
 
 TransmissionFallBack:
+nop
+nop
+nop
   rol r26
   rol r27
 
   brcs highblink
-  out   PORTA,r18 ; Set  HIGH ; lowblink
+  out   PORTB,r18 ; Set  HIGH ; lowblink
   
   ldi r20,10
   call delaylp
-  out   PORTA,r16 ; Set  LOW
+  out   PORTB,r16 ; Set  LOW
   
-  ldi r20,17
+  ldi r20,16 ; 17
   call delaylp
 
 LoopEnd:
@@ -53,13 +56,13 @@ LoopEnd:
   ret
 
 highblink:
-  out   PORTA,r18 ; Set  HIGH
+  out   PORTB,r18 ; Set  HIGH
   
-  ldi r20,20
+  ldi r20,23 ; 20 
   call delaylp
-  out   PORTA,r16 ; Set  LOW
+  out   PORTB,r16 ; Set  LOW
   
-  ldi r20,7
+  ldi r20,3 ; 7
   call delaylp
   rjmp LoopEnd 
 
