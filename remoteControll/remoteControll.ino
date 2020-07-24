@@ -19,6 +19,8 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 //===== Timer ====
 long heightControlTimer = 0;
+long clickTimeStampLeft = 0;
+long pidValueAdjustTimer = 0;
 
 //===== Encoder =====
 
@@ -51,12 +53,20 @@ int maxOperationCount = 4;
 
 struct DataPackage
 {
-  uint8_t operation = 0;
-  uint16_t heightAddition = 0;
+  short int operation = 0;
+  short int heightAddition = 0;
+  float pk = 0.2f;
+  float ik = 0.75f;
+  float dk = 0;
+  float comp = 0.9991f;
 };
+
 
 typedef struct DataPackage Data;
 Data data;
+
+//====== Menu Selection ======
+int currentPIDMenuPoint = 0;
 
 struct TelemetryData
 {
@@ -72,7 +82,7 @@ typedef struct TelemetryData Telemetry;
 Telemetry tData;
 
 void setup() {
-  Serial.begin(9600);
+  Serial.begin(57600);
   Wire.begin();
   //Set up NRF24
   radio.begin();
@@ -97,6 +107,12 @@ void setup() {
   lXOffset = analogRead(2);
   lYOffset = analogRead(3);
 
+  pinMode(leftJoystickBtnPort, INPUT);
+  digitalWrite(leftJoystickBtnPort, HIGH);
+
+  pinMode(rightJoystickBtnPort, INPUT);
+  digitalWrite(rightJoystickBtnPort, HIGH);
+
   // OLED Display Setup
   display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
   display.setTextColor(WHITE);
@@ -109,8 +125,8 @@ void setup() {
 
 void loop() {
   
-  handleEncoderClick();
   handleJoysticks();
+  handleEncoderClick();
   handleDataTransmission();
   updateDisplay();  
   // handleDataReceive();
@@ -120,26 +136,59 @@ void handleJoysticks()
 {
   // data.rX = analogRead(0) - rXOffset;
   // data.rY = analogRead(1) - rYOffset;
-  int lx = analogRead(2) - lXOffset;
   // data.lY = analogRead(3) - lYOffset;
 
   // if(data.rX < 5 && data.rX > -5) data.rX = 0;
   // if(data.rY < 5 && data.rY > -5) data.rY = 0;
-  if(lx < 3 && lx > -3) lx = 0;
   // if(data.lY < 5 && data.lY > -5) data.lY = 0;
 
   if(millis() - heightControlTimer > 10)
   {
+    int lx = analogRead(2) - lXOffset;
+    if(lx < 3 && lx > -3) lx = 0;
     int t = -map(lx, -512, 512, -2, 3); // required because of poti errors
-    data.heightAddition += t;
     heightControlTimer = millis();
-    if(t < -1) t *= 10; // This is required because i want the motors to faster throttle down than up for safety reasons
+    if(t < 0) t *= 6; // This is required because i want the motors to faster throttle down than up for safety reasons
+    // if(t == 3) t *= 5;
+    // if(t == -2) t *= 20;
+    data.heightAddition += t * 5;
     data.heightAddition = data.heightAddition <= 5 ? 5 : data.heightAddition;
     data.heightAddition = data.heightAddition > 800 ? 800 : data.heightAddition; 
   }
 
+  if(millis() - pidValueAdjustTimer > 50)
+  {
+    pidValueAdjustTimer = millis();
+
+    int rx = analogRead(0) - rXOffset;
+    if(rx < 3 && rx > -3) rx = 0;
+    int t = -map(rx, -512, 512, -2, 2); // required because of poti errors
+    float addition = (float)t * 0.01f;
+    if(currentPIDMenuPoint == 0) data.pk += addition * 10;
+    if(currentPIDMenuPoint == 1) data.ik += addition;
+    if(currentPIDMenuPoint == 2) data.dk += addition;
+    if(currentPIDMenuPoint == 3) data.comp += (addition / 10);
+
+  }
+
 
   //btnclicks
+
+  if(digitalRead(leftJoystickBtnPort) == LOW && (millis() - clickTimeStampLeft) > 250)
+  {
+    clickTimeStampLeft = millis();
+    currentPIDMenuPoint++;
+    if(currentPIDMenuPoint > 3) currentPIDMenuPoint = 0;
+  }
+
+  if(digitalRead(rightJoystickBtnPort) == LOW && (millis() - clickTimeStampLeft) > 250)
+  {
+    clickTimeStampLeft = millis();
+    approvedOperation = 3;
+    operationSent = false;
+  }
+
+
 }
 
 void handleDataTransmission()
@@ -233,14 +282,31 @@ void updateDisplay()
   // display.print("yaw    ");
   // display.println(tData.yawAngle);
 
-//  display.print("rX: ");
-//  display.println(data.rX);
+  //  display.print("rX: ");
+  //  display.println(data.rX);
 
-//  display.print("rY: ");
-//  display.println(data.rY);
+  //  display.print("rY: ");
+  //  display.println(data.rY);
 
- display.print("lX: ");
- display.println(data.heightAddition);
+  display.print("h throttle: ");
+  display.println(data.heightAddition);
+
+  if(currentPIDMenuPoint == 0) display.print("-> ");
+  display.print("pk: ");
+  display.println(data.pk * 100);
+
+  if(currentPIDMenuPoint == 1) display.print("-> ");
+  display.print("ik: ");
+  display.println(data.ik * 100);
+
+  if(currentPIDMenuPoint == 2) display.print("-> ");
+  display.print("dk: ");
+  display.println(data.dk * 100);
+
+  if(currentPIDMenuPoint == 3) display.print("-> "); 
+  display.print("m_comp: ");
+  display.println(data.comp * 1000);
+
 
 //  display.print("lY: ");
 //  display.println(data.lY);

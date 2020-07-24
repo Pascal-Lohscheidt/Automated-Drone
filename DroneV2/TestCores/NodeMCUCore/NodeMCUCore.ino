@@ -175,7 +175,9 @@ float finalValuePitch; //bad idea?
 float averageSumYaw;
 float finalValueYaw; //bad idea?
 
-//====== Structs ======
+//====== Structs ====== => 
+//The PID regulator needs information from previous iterations. 
+//Inorder to make it more reusable i created that data container
 struct PIDSavings {
   int lastYValue = 0;
   int lastDifValue = 0;
