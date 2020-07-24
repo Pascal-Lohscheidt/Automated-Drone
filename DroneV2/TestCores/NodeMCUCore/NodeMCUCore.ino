@@ -1,31 +1,47 @@
-#include <Wire.h>
+#include <Wire.h> //For I2C comm
+#include <EasyTransferI2C.h>
+
 #include <math.h>
-#include <printf.h>
+// #include <printf.h>
+
 #include <nRF24L01.h>
 #include <RF24_config.h>
 #include <RF24.h>
+
 #include <SPI.h>
 
+//===== Debug Settings =====
+#define showsThrottle false
+#define showsAngles true
 
-extern "C"
-{
-  //void SetThrottle(int port, int throttle);
-  void start();
-  void Transmit();
-}
-
-volatile unsigned int th = 0;
-volatile byte chan = 2;
-
-//==== Loop settings
-
+//==== Loop settings ====
+long pidTimer = 0;
 long imuTimer = 0;
+long evaluateImuTimestamp = 0;
+long heightControlTimer = 0;
+long deltaTime = 0;
 
+long currentMillisOfCylce; //TODO find out if int is enough for timers to safe speed;
+long currentMicrosOfCylce;
+
+//===== I2C Adressing ======
+#define I2C_SLAVE_ADDRESS 9
+
+EasyTransferI2C ET;
+
+struct SEND_DATA_STRUCTURE {
+    int16_t motorStartUpPhase;
+    int16_t throttleA;
+    int16_t throttleB;
+    int16_t throttleC;
+    int16_t throttleD;
+};
+
+SEND_DATA_STRUCTURE nanoPWMData;
 
 //==== NRF24 Settings ====
 RF24 radio(6, 7); // CE, CSN
 const byte address[][6] = {"0", "1"};
-
 int lastOperation = 0;
 
 struct DataPackage
@@ -54,19 +70,9 @@ struct TelemetryData
 typedef struct TelemetryData Telemetry;
 Telemetry tData;
 
-
-//==== Echo settings ===
-
-int triggerPin = 30;
-int echoPin = 31;
-float heightOffset;
-
-
 //==== Settings ====
-int minThrottle = 450; //250 standard
-int maxThrottle = 700; //350 good testing value  <->  900 flightable
-
-bool stopThrottle = false;
+#define MIN_THROTTLE 1050 //250 standard
+#define MAX_THROTTLE 1500 //350 good testing value  <->  900 flightable
 
 //===== Set Points =====
 float xAngleSetPoint = 0;
@@ -78,7 +84,10 @@ float yVectorSetPoint = 0;
 
 float heightSetPoint = 2; //height in cm
 
+
 //======== PID Settings =========
+#define PID_INTERVAL 1250//1250; //us -> 1 / 800 -> 800hz / 1000us -> 1khz
+
 float heightIFaktor = 0.01; //0.09//0.045
 
 float zAnglePFaktor = 0.1;
@@ -89,17 +98,12 @@ float xyMovePFaktor = 3; //16
 float xyMoveIFaktor = 0.00; //0.001
 float xyMoveDFaktor = 0; //0.001
 
-float xyAnglePFaktor = 0.8;//0.9//0.85;//0.4 //3
+float xyAnglePFaktor = 0.1;//0.9//0.85;//0.4 //3
 float xyAngleIFaktor = 0.015; //0.02 //0.035
-float xyAngleDFaktor = 7;//6.7//6.2//5.5 //90
+float xyAngleDFaktor = 13;//6.7//6.2//5.5 //90
 
 bool IblockedWithHeight = true; 
 float PIDHeightconstantAdjustFaktor = 1;
-
-
-//==== PID variables =====
-long pidTimer = 0;
-int pidInterval = 7000;//1250; //us -> 1 / 800 -> 800hz
 
 
 //float accJitterFactor = 40;
@@ -110,6 +114,8 @@ int throttleB; //2 -> pin 9
 int throttleC; //3 -> pin 10
 int throttleD; //4 -> pin 11
 
+int heightThrottleAddition = 0;
+
 //===== Drone Info ====
 float currentXRotation;
 float currentYRotation;
@@ -117,10 +123,11 @@ float currentZRotation;
 
 float currentHeight;
 
+int motorStartUpPhase = 2; //0 = not started ; 1 = should start; 2 started; -1 emergency stop
 
 //===== Gyro variables =======
 
-int gyroX, gyroY, gyroZ;
+int16_t gyroX, gyroY, gyroZ;
 double accX, accY, accZ, accTotalVector;
 int temperature;
 long gyroXcal, gyroYcal, gyroZcal;
@@ -128,10 +135,12 @@ long gyroXcal, gyroYcal, gyroZcal;
 long accXcal, accYcal, accZcal;
 
 long loopTimer;
+bool IMU_SetUpDone = false;
 
 long accLoopTimer;
 double accXAverageSum;
 double accYAverageSum;
+double accZAverageSum;
 float finalAccX;
 float finalAccY;
 int accAverageSumCounter = 0;
@@ -145,7 +154,7 @@ float anglePitchOutput, angleRollOutput, angleYawOutput;
 float accXOutput, accYOutput, accZOutput;
 
 //====== Average Filter =====
-int averageCounterMax = 30;
+int averageCounterMax = 10;
 int averageCounter = 0;
 
 float averageSumVectorX;
@@ -166,7 +175,9 @@ float finalValuePitch; //bad idea?
 float averageSumYaw;
 float finalValueYaw; //bad idea?
 
-//====== Structs ======
+//====== Structs ====== => 
+//The PID regulator needs information from previous iterations. 
+//Inorder to make it more reusable i created that data container
 struct PIDSavings {
   int lastYValue = 0;
   int lastDifValue = 0;
@@ -194,183 +205,178 @@ struct Vector3 moveVector;
 //================= Set Up ====================
 
 void setup() {
-  start();
-  Wire.begin();
   Serial.begin(57600);
   Serial.println("--------------Drone is booting up-------------");
+  Serial.println("--------------Establishing I2C Connection-------------");
+  Wire.setClock(400000); //Must be called before wire begin
+  Wire.begin();
+  delay(1000); // giving rest of the modules time to start up
+
+  ET.begin(details(nanoPWMData), &Wire); //Establish an i2c connection for Arduino
 
   //==== Gyro setup =====
   Serial.println("\n");
   Serial.println("--MPU Setup--");
 
-  setup_MPU_registers();
-
+  handleIMUSetup();
+  Serial.println("--MPU Setup 2--");
   for (int cal_int = 0; cal_int < 2000 ; cal_int ++) {                 //Run this code 2000 times
-    read_MPU_data();                                              //Read the raw acc and gyro data from the MPU-6050
+    readAndCheckIMU();                                              //Read the raw acc and gyro data from the MPU-6050
     gyroXcal += gyroX;                                              //Add the gyro x-axis offset to the gyro_x_cal variable
     gyroYcal += gyroY;                                              //Add the gyro y-axis offset to the gyro_y_cal variable
     gyroZcal += gyroZ;                                              //Add the gyro z-axis offset to the gyro_z_cal variable
-    delay(3);                                                       //Delay 3us to simulate the 250Hz program loop
+    delayMicroseconds(2500);                                        //Delay 2.5ms to simulate the 400Hz program loop
   }
+  Serial.println("--MPU Setup 3--");
 
   gyroXcal /= 2000;                                                  //Divide the gyro_x_cal variable by 2000 to get the avarage offset
   gyroYcal /= 2000;                                                  //Divide the gyro_y_cal variable by 2000 to get the avarage offset
   gyroZcal /= 2000;                                                  //Divide the gyro_z_cal variable by 2000 to get the avarage offset
 
   calibrateGyroAngles();
-
-  //  for (int cal_int = 0; cal_int < 2000 ; cal_int ++) {                 //Run this code 2000 times
-  //    read_MPU_data();                                              //Read the raw acc and gyro data from the MPU-6050
-  //    accXcal += accX;
-  //    accYcal += accY;
-  //    accZcal += accZ;
-  //    delay(3);                                                       //Delay 3us to simulate the 250Hz program loop
-  //  }
-  //
-  //  accXcal /= 2000;
-  //  accYcal /= 2000;
-  //  accZcal /= 2000;
-
-
-  //===== Echo Setup ===
-  Serial.println("\n");
-  Serial.println("--Echo sensor Setup--");
-  pinMode(triggerPin, OUTPUT);
-  pinMode(echoPin, INPUT);
-  digitalWrite(triggerPin, HIGH);
-  heightOffset = getDistance(triggerPin, echoPin);
-  currentHeight = 0;
-
-  Serial.println("Height is now zero");
-  Serial.println("------------------\n\n");
-
+  Serial.println("--MPU Setup 4--");
+  IMU_SetUpDone = true; //this variable just stands for IMU consider renaming it
   //===== NRF24 Setup ====
   Serial.println("\n");
   Serial.println("--NRF24 Radio Setup--");
-  radio.begin();
-  //radio.openWritingPipe(address[1]);
-  radio.openReadingPipe(0, address[0]);
-  radio.setPALevel(RF24_PA_HIGH);
-  radio.startListening();
+  // radio.begin();
+  // //radio.openWritingPipe(address[1]);
+  // radio.openReadingPipe(0, address[0]);
+  // radio.setPALevel(RF24_PA_HIGH);
+  // radio.startListening();
 
   //===== Timer Setup ====
   loopTimer = micros();
   pidTimer = micros();
   imuTimer = micros();
-  
-  //=== Engine Setup ===
-  fireUpEngines();
-  applyThrottle();
-  //Serial.println("\n");
-  //Serial.println("--------------Set up - done-------------");
+  deltaTime = micros();
+
+  Serial.println("\n");
+  Serial.println("--------------Set up - done-------------");
+  delay(2000);
 }
 
-unsigned int CreateBitSignal(unsigned int throttle)
+void loop()
 {
-  throttle += 48; //adding the 48 to make sure the signal is correct
-  int checksum = 0;
-  int checksumData = throttle * 2;
-  checksum = (checksumData ^ (checksumData >> 4) ^ (checksumData >> 8)) & 0xf;
+  if (micros() - imuTimer >= 2500) // 3560
+  {
+    evaluateIMUData();
+    imuTimer = micros();
+  }
 
-  unsigned int finalSignal = (throttle << 5) + checksum;
-  //Serial.println(finalSignal);
-  return finalSignal;
+  showDebug();
 }
 
 //==================== Main Loop ============================
 
-void loop() {
+// void loop() {
 
-  //loopTimer = micros();
-  averageCounter++; // One Counter for all average dampen methods
-  handleRadioReceive();
+//   currentMillisOfCylce = millis();
 
-  
-//  int x = 0.07* (currentHeight);
-//  int fx = x > 1 ? 1 : x;
-//  PIDHeightconstantAdjustFaktor = fx;
-  PIDHeightconstantAdjustFaktor = 1;
-//  if(currentHeight < 15)
-//  {
-//    int x = 0.25 * currentHeight;
-//    int fx = -(1 / (x <= 0 ? 0.01 : x)) + 1;
-//    PIDHeightconstantAdjustFaktor =  fx <= 0 ? 0.01 : fx;
-//  }
-//  else
-//  {
-//    PIDHeightconstantAdjustFaktor = 1;
-//  }
-  
-  //===== Control Loop =====
-  //Serial.println(currentHeight);
 
-  currentHeight = currentHeight * 0.85 + (getDistance(triggerPin, echoPin) - heightOffset) * 0.15;
-  
-  
-  //=== Define Rotation values ===
-  currentYRotation = anglePitchOutput;
-  currentXRotation = angleRollOutput;
-  currentZRotation = angleYawOutput;
-  
-  //=== Define move vector values ===
-  //calculateFlightVector();
-  
-  if(micros() - pidTimer > pidInterval)
-  { 
-    //Serial.println(long(micros() - pidTimer));
-    pidTimer = micros();
-    //handleHeightThrottle();
+//   // handleRadioReceive();
 
-    setThrottleForAll(minThrottle);
+//   //===== Measure & Control Loop =====
 
-    if(currentHeight > 1) IblockedWithHeight = false;
-  
-    handleYawStablelisation();
+//   if(motorStartUpPhase == 2)
+//   {
+//     PIDHeightconstantAdjustFaktor = 1;
+   
+//     //=== Define Rotation values ===
+//     currentYRotation = roundToOneDecimal(anglePitchOutput);
+//     currentXRotation = roundToOneDecimal(angleRollOutput);
+//     currentZRotation = roundToOneDecimal(angleYawOutput);
 
-    handleAutoHover();
-  }
-  else if (micros() - imuTimer > 2300) // 3560
-  {
-    //Serial.println(long(micros() - imuTimer));
-    evaluateIMUData();
-    imuTimer = micros();
-  }
-  
-  Serial.print(currentHeight);
-  Serial.print("\t");
-  Serial.print(currentXRotation);
-  Serial.print("\t");
-  Serial.print(currentYRotation);
-  Serial.print("\t");
-  Serial.println(currentZRotation);
 
-  limitThrottle();//important to limit all throttle values
-  applyThrottle();
+//     //currentHeight = currentHeight * 0.85 + (getDistance(triggerPin, echoPin) - heightOffset) * 0.15;
 
-  //Serial.println((long)(micros() - loopTimer));
-}
+//     handleHeightControls();
 
-//==== Echo Methods =====
+//     // Serial.println("After Rounding & Height:");
+//     // Serial.println(micros());
 
-float getDistance(int triggerPort, int echoPort)
+//     currentMicrosOfCylce = micros(); 
+//     if(currentMicrosOfCylce - pidTimer > PID_INTERVAL) 
+//     { 
+//       pidTimer = currentMicrosOfCylce;
+//       //handleHeightThrottle();
+
+//       if(currentHeight > 1) IblockedWithHeight = false;
+
+//       handleYawStablelisation();
+
+//       handleAutoHover();
+//       // Serial.println("After PID:");
+//       // Serial.println(micros());
+
+//     }
+    
+//     if (micros() - imuTimer > 2000) // 3560
+//     {
+//       evaluateIMUData();
+//       imuTimer = micros();
+//     }
+
+//     // evaluateIMUData();
+//     // Serial.println("After IMU:");
+//     // Serial.println(micros());
+
+
+//     limitThrottle();//important to limit all throttle values
+
+
+//     //===== Send done data to Throttle Handling Nano ======
+//     TransmitDataToNanoRight();
+
+//     // Serial.println("End:");
+//     // Serial.println(micros());
+
+//     showDebug();
+
+//   }
+//   else if(motorStartUpPhase == 1)
+//   {
+//       //=== Engine Setup ===
+//   }
+// }
+
+void showDebug()
 {
-  float distance;
-  float deltaTime;
+  if(showsAngles)
+  {
+    Serial.print(currentXRotation);
+    Serial.print("\t");
+    Serial.print(currentYRotation);
+    Serial.print("\t");
+    Serial.println(currentZRotation);
+  }
 
-  digitalWrite(triggerPort, LOW);
-  delayMicroseconds(3);
-  noInterrupts();
-  digitalWrite(triggerPort, HIGH); //Trigger Impuls 10 us
-  delayMicroseconds(10);
-  interrupts();
-  digitalWrite(triggerPort, LOW);
-  deltaTime = pulseIn(echoPort, HIGH); // Echo-Zeit messen
-
-  deltaTime /= 2; // Zeit halbieren
-  distance = deltaTime / 29.1; // Zeit in Zentimeter umrechnen
-  return (distance);
+  if(showsThrottle)
+  {
+    Serial.print(throttleA);
+    Serial.print("\t");
+    Serial.print(throttleB);
+    Serial.print("\t");
+    Serial.print(throttleC);
+    Serial.print("\t");
+    Serial.println(throttleD);
+  }
 }
 
+//====== I2C Methods =====
+
+void TransmitDataToNanoRight()
+{
+  //=== Setting the throttle data ===
+  nanoPWMData.motorStartUpPhase = motorStartUpPhase;
+
+  nanoPWMData.throttleA = throttleA;
+  nanoPWMData.throttleB = throttleB;
+  nanoPWMData.throttleC = throttleC;
+  nanoPWMData.throttleD = throttleD;
+
+  ET.sendData(I2C_SLAVE_ADDRESS);
+}
 
 //===== NRF24 Methods ====
 
@@ -399,35 +405,40 @@ void handleRadioReceive()
       Serial.println("operration:");
       Serial.println(data.operation);
 
+      if(data.operation == 1 && motorStartUpPhase == 0)
+        motorStartUpPhase = 1; //set´s the start of the motors
+
       if (data.operation == 3)
         stopEngines();
 
       if (data.operation == 4)
         startEngines();
     }
-
-    //    Serial.println("_____Joystick Signal_____");
-    //    Serial.print("rX: ");
-    //    Serial.print(data.rX);
-    //
-    //    Serial.print(" - rY: ");
-    //    Serial.println(data.rY);
-    //
-    //    Serial.print(" - .lX: ");
-    //    Serial.print(data.lX);
-    //
-    //    Serial.print(" - .lY: ");
-    //    Serial.println(data.lY);
   }
 }
 
+void handleHeightControls()
+{
+  if(currentMillisOfCylce - heightControlTimer > 10)
+  {
+    int t = -map(data.lX, -512, 512, -2, 3); // required because of poti errors
+    heightThrottleAddition += t;
+    heightControlTimer = currentMillisOfCylce;
+    if(t < -1) t *= 10; // This is required because i want the motors to faster throttle down than up for safety reasons
+    
+    heightThrottleAddition = heightThrottleAddition < 0 ? 0 : heightThrottleAddition;
+    heightThrottleAddition = heightThrottleAddition > MAX_THROTTLE - MIN_THROTTLE ? MAX_THROTTLE - MIN_THROTTLE : heightThrottleAddition; 
+  }
+
+  setThrottleForAll(MIN_THROTTLE + heightThrottleAddition);
+}
 
 //======= autonomous methods =========
 
 
 void handleHeightThrottle()
 {
-  setThrottleForAll(minThrottle + ApplyPID(currentHeight, heightSetPoint, &heightSavings, 2, heightIFaktor, 0, false, 600));
+  setThrottleForAll(MIN_THROTTLE + ApplyPID(currentHeight, heightSetPoint, &heightSavings, 2, heightIFaktor, 0, false, 600));
 }
 
 void handleYawStablelisation()
@@ -457,14 +468,6 @@ void handleAutoHover()
   throttleC += (x - y);
   throttleD += (-x - y);
 
-  //  Serial.print(throttleA);
-  //  Serial.print("\t");
-  //  Serial.print(throttleB);
-  //  Serial.print("\t");
-  //  Serial.print(throttleC);
-  //  Serial.print("\t");
-  //  Serial.println(throttleD);
-
 
   //int x = ApplyPID(currentXRotation, xAngleSetPoint, &xSavings, xyAnglePFaktor, xyAngleIFaktor, 1);
   //int y = ApplyPID(currentYRotation, yAngleSetPoint, &ySavings, xyAnglePFaktor, xyAngleIFaktor, 1);
@@ -472,86 +475,6 @@ void handleAutoHover()
   //  throttleB += (-x - y);
   //  throttleC += (x + y);
   //  throttleD += (x - y);
-}
-
-//========== Throttle Steering ============
-
-void fireUpEngines()
-{
-  Serial.println("Fire up Engines!!");
-  for (int i = 1; i <= 800; i++)
-  {
-    Serial.print("Engine boost: ");
-    Serial.println(i);
-    setThrottleForAll(minThrottle + 150);
-    limitThrottle();
-    applyThrottle();
-    delay(1);
-    Serial.print("\n");
-  }
-  Serial.println("Done \n\n");
-}
-
-
-void setThrottleForAll(int throttle)
-{
-  throttleA = throttle;
-  throttleB = throttle;
-  throttleC = throttle;
-  throttleD = throttle;
-}
-
-float getAverageThrottle()
-{
-  return (float)(throttleA + throttleB + throttleC + throttleD) / 4;
-}
-
-void limitThrottle()
-{
-  throttleA = throttleA < minThrottle ? minThrottle : throttleA;
-  throttleB = throttleB < minThrottle ? minThrottle : throttleB;
-  throttleC = throttleC < minThrottle ? minThrottle : throttleC;
-  throttleD = throttleD < minThrottle ? minThrottle : throttleD;
-
-  throttleA = throttleA > maxThrottle ? maxThrottle : throttleA;
-  throttleB = throttleB > maxThrottle ? maxThrottle : throttleB;
-  throttleC = throttleC > maxThrottle ? maxThrottle : throttleC;
-  throttleD = throttleD > maxThrottle ? maxThrottle : throttleD;
-
-  throttleA = abs(throttleA);
-  throttleB = abs(throttleB);
-  throttleC = abs(throttleC);
-  throttleD = abs(throttleD);
-
-  if (stopThrottle)
-  {
-    throttleA = 1;
-    throttleB = 1;
-    throttleC = 1;
-    throttleD = 1;
-  }
-}
-
-void applyThrottle()
-{
-  if (stopThrottle) return;
-  noInterrupts();
-  th = CreateBitSignal(throttleA);
-  chan = 1;
-  Transmit();
-
-  th = CreateBitSignal(throttleB);
-  chan = 2;
-  Transmit();
-
-  th = CreateBitSignal(throttleC);
-  chan = 4;
-  Transmit();
-
-  th = CreateBitSignal(throttleD);
-  chan = 8;
-  Transmit();
-  interrupts();
 }
 
 // ========= Gyro Evaluation methods ===========
@@ -583,20 +506,28 @@ void calculateFlightVector()
   //ApplyEulerMatrix(&filterG, -angleRollOutput, -anglePitchOutput, -angleYawOutput);
 }
 
+
+
 void evaluateIMUData()
 {
-  read_MPU_data();                                                //Read the raw acc and gyro data from the MPU-6050
+  readAndCheckIMU();                                             //Read the raw acc and gyro data from the MPU-6050
 
   gyroX -= gyroXcal;                                                //Subtract the offset calibration value from the raw gyro_x value
   gyroY -= gyroYcal;                                                //Subtract the offset calibration value from the raw gyro_y value
   gyroZ -= gyroZcal;                                                //Subtract the offset calibration value from the raw gyro_z value
 
   //Gyro angle calculations
-  //0.0000611 = 1 / (250Hz / 65.5)
-  anglePitchGyro += gyroY * 0.0000611;                                   //Calculate the traveled pitch angle and add this to the angle_pitch variable
-  angleRollGyro += gyroX * 0.0000611;                                    //Calculate the traveled roll angle and add this to the angle_roll variable
-  angleYawGyro += gyroZ * 0.0000611;
+  //0.0000611 = 1 / (250Hz * 65.5)
+  //float nv = 1 / ((1000000 / (micros() - deltaTime)) * 65.5);
+  //double nv = (double)(1/65.5) * ((double)(micros() - deltaTime) / (double)1000000);
+  // double nv = 0.0000611;
+  double nv = 0.0000381; //fixed 400Hz 
+  anglePitchGyro += gyroY * nv;                                   //Calculate the traveled pitch angle and add this to the angle_pitch variable
+  angleRollGyro += gyroX * nv;                                    //Calculate the traveled roll angle and add this to the angle_roll variable
+  angleYawGyro += gyroZ * nv;
 
+  deltaTime = micros();
+  
   //0.000001066 = 0.0000611 * (3.142(PI) / 180degr) The Arduino sin function is in radians
   anglePitchGyro -= anglePitchGyro * sin(gyroZ * 0.000001066);               //If the IMU has yawed transfer the roll angle to the pitch angel
   angleRollGyro += angleRollGyro * sin(gyroZ * 0.000001066);               //If the IMU has yawed transfer the pitch angle to the roll angel
@@ -604,14 +535,14 @@ void evaluateIMUData()
   calibrateGyroAngles();
 
   //To dampen the pitch and roll angles a complementary filter is used
-  anglePitchOutput = anglePitchOutput * 0.90 + anglePitchGyro * 0.1;   //Take 90% of the output pitch value and add 10% of the raw pitch value
-  angleRollOutput = angleRollOutput * 0.90 + angleRollGyro * 0.1;      //Take 90% of the output roll value and add 10% of the raw roll value
-  angleYawOutput = angleYawOutput * 0.90 + angleYawGyro * 0.1;
+  anglePitchOutput = anglePitchOutput * 0.99 + anglePitchGyro * 0.01;   //Take 90% of the output pitch value and add 10% of the raw pitch value
+  angleRollOutput = angleRollOutput * 0.99 + angleRollGyro * 0.01;      //Take 90% of the output roll value and add 10% of the raw roll value
+  angleYawOutput = angleYawOutput * 0.99 + angleYawGyro * 0.01;
 
 
-  accXOutput = accXOutput * 0.995 + ((accX) - accXcal) * 0.005;
-  accYOutput = accYOutput * 0.995 + ((accY) - accYcal) * 0.005;
-  accZOutput = accZOutput * 0.995 + ((accZ) - accZcal) * 0.005;
+//  accXOutput = accXOutput * 0.995 + ((accX) - accXcal) * 0.005;
+//  accYOutput = accYOutput * 0.995 + ((accY) - accYcal) * 0.005;
+//  accZOutput = accZOutput * 0.995 + ((accZ) - accZcal) * 0.005;
 
   //angle_pitch_output = angle_pitch;
   //angle_roll_output = angle_roll;
@@ -620,7 +551,6 @@ void evaluateIMUData()
 
 void calibrateGyroAngles()
 {
-  
   //Accelerometer angle calculations
   accTotalVector = sqrt((accX * accX) + (accY * accY) + (accZ * accZ)); //Calculate the total accelerometer vector
   //57.296 = 1 / (3.142 / 180) The Arduino asin function is in radians
@@ -632,8 +562,10 @@ void calibrateGyroAngles()
   angleRollAcc -= -0.49;                                               //Accelerometer calibration value for roll
 
   if (set_gyro_angles) {                                               //If the IMU is already started
-    anglePitchGyro = anglePitchGyro * 0.9995 + anglePitchAcc * 0.0005;     //Correct the drift of the gyro pitch angle with the accelerometer pitch angle 0.9996 0.000
-    angleRollGyro = angleRollGyro * 0.9995 + angleRollAcc * 0.0005;        //Correct the drift of the gyro roll angle with the accelerometer roll angle
+    anglePitchGyro = anglePitchGyro * 0.995 + anglePitchAcc * 0.005;     //Correct the drift of the gyro pitch angle with the accelerometer pitch angle 0.9996 0.000
+    angleRollGyro = angleRollGyro * 0.995 + angleRollAcc * 0.005;        //Correct the drift of the gyro roll angle with the accelerometer roll angle
+    // anglePitchGyro = anglePitchGyro * 1 + anglePitchAcc * 0;     //Correct the drift of the gyro pitch angle with the accelerometer pitch angle 0.9996 0.000
+    // anglePitchGyro = anglePitchGyro * 1 + anglePitchAcc * 0;     //Correct the drift of the gyro pitch angle with the accelerometer pitch angle 0.9996 0.000
   }
   else {                                                               //At first start
     anglePitchGyro = anglePitchAcc;                                     //Set the gyro pitch angle equal to the accelerometer pitch angle
@@ -642,44 +574,45 @@ void calibrateGyroAngles()
   }
 }
 
-void setup_MPU_registers() {
-  //Activate the MPU-6050
-  Wire.beginTransmission(0x68);                                        //Start communicating with the MPU-6050
-  Wire.write(0x6B);                                                    //Send the requested starting register
-  Wire.write(0x00);                                                    //Set the requested starting register
-  Wire.endTransmission();                                              //End the transmission
-  //Configure the accelerometer (+/-8g)
-  Wire.beginTransmission(0x68);                                        //Start communicating with the MPU-6050
-  Wire.write(0x1C);                                                    //Send the requested starting register
-  Wire.write(0x10);                                                    //Set the requested starting register
-  Wire.endTransmission();                                              //End the transmission
-  //Configure the gyro (500dps full scale)
-  Wire.beginTransmission(0x68);                                        //Start communicating with the MPU-6050
-  Wire.write(0x1B);                                                    //Send the requested starting register
-  Wire.write(0x08);                                                    //Set the requested starting register
-  Wire.endTransmission();                                              //End the transmission
+void writeOnIMU(uint8_t regAdress, uint8_t data)
+{
+  Wire.beginTransmission(0x68); //Start Com. IMU on given Adress
+  Wire.write(regAdress);
+  Wire.write(data);
+  Wire.endTransmission();
 }
 
-void read_MPU_data() {                                            //Subroutine for reading the raw gyro and accelerometer data
+void readAndCheckIMU()
+{
   Wire.beginTransmission(0x68);                                        //Start communicating with the MPU-6050
   Wire.write(0x3B);                                                    //Send the requested starting register
   Wire.endTransmission();                                              //End the transmission
-  Wire.requestFrom(0x68, 14);                                          //Request 14 bytes from the MPU-6050
+  Wire.requestFrom(0x68, (uint8_t)14);                                          //Request 14 bytes from the MPU-6050
+      Serial.println("--MPU Setup 2.5--");
   while (Wire.available() < 14);                                       //Wait until all the bytes are received
-  accX = Wire.read() << 8 | Wire.read();                              //Add the low and high byte to the acc_x variable
-  accY = Wire.read() << 8 | Wire.read();                              //Add the low and high byte to the acc_y variable
-  accZ = Wire.read() << 8 | Wire.read();                              //Add the low and high byte to the acc_z variable
-  temperature = Wire.read() << 8 | Wire.read();                        //Add the low and high byte to the temperature variable
-  gyroX = Wire.read() << 8 | Wire.read();                             //Add the low and high byte to the gyro_x variable
-  gyroY = Wire.read() << 8 | Wire.read();                             //Add the low and high byte to the gyro_y variable
-  gyroZ = Wire.read() << 8 | Wire.read();                             //Add the low and high byte to the gyro_z variable
+  accX = (double)((Wire.read()<<8) | Wire.read());                             //Add the low and high byte to the acc_x variable
+  accY = (double)((Wire.read()<<8) | Wire.read());                             //Add the low and high byte to the acc_y variable
+  accZ = (double)((Wire.read()<<8) | Wire.read());                             //Add the low and high byte to the acc_z variable
+  temperature = (((int16_t)Wire.read()<<8) | Wire.read());                       //Add the low and high byte to the temperature variable
+  gyroX = (((int16_t)Wire.read()<<8) | Wire.read());                             //Add the low and high byte to the gyro_x variable
+  gyroY = (((int16_t)Wire.read()<<8) | Wire.read());                             //Add the low and high byte to the gyro_y variable
+  gyroZ = (((int16_t)Wire.read()<<8) | Wire.read());                             //Add the low and high byte to the gyro_z variable
 }
+
+void handleIMUSetup()
+{
+  writeOnIMU(0x6B, 0x00); //Handle Initial Starting register
+  writeOnIMU(0x1C, 0x10); //Handle Accel Config
+  writeOnIMU(0x1B, 0x08); //Handle Gyro Config
+}
+
+
 
 //===== Secure Functions ====
 
 void stopEngines()
 {
-  stopThrottle = true;
+  motorStartUpPhase = -1;
   Serial.println("-------------------");
   Serial.println("Throttle stopped!!");
   Serial.println("-------------------");
@@ -687,10 +620,44 @@ void stopEngines()
 
 void startEngines()
 {
-  stopThrottle = false;
+  motorStartUpPhase = 1;
   Serial.println("-------------------");
   Serial.println("Engines Started");
   Serial.println("-------------------");
+}
+
+void setThrottleForAll(int throttle)
+{
+  throttleA = throttle;
+  throttleB = throttle;
+  throttleC = throttle;
+  throttleD = throttle;
+}
+
+void limitThrottle()
+{
+  throttleA = throttleA < MIN_THROTTLE ? MIN_THROTTLE : throttleA;
+  throttleB = throttleB < MIN_THROTTLE ? MIN_THROTTLE : throttleB;
+  throttleC = throttleC < MIN_THROTTLE ? MIN_THROTTLE : throttleC;
+  throttleD = throttleD < MIN_THROTTLE ? MIN_THROTTLE : throttleD;
+
+  throttleA = throttleA > MAX_THROTTLE ? MAX_THROTTLE : throttleA;
+  throttleB = throttleB > MAX_THROTTLE ? MAX_THROTTLE : throttleB;
+  throttleC = throttleC > MAX_THROTTLE ? MAX_THROTTLE : throttleC;
+  throttleD = throttleD > MAX_THROTTLE ? MAX_THROTTLE : throttleD;
+
+  throttleA = abs(throttleA);
+  throttleB = abs(throttleB);
+  throttleC = abs(throttleC);
+  throttleD = abs(throttleD);
+
+  if (motorStartUpPhase == -1) //must be called after limitation for saftey reasons
+  {
+    throttleA = 500;
+    throttleB = 500;
+    throttleC = 500;
+    throttleD = 500;
+  }
 }
 
 //===== Apply Eulermatrix ====
@@ -704,6 +671,7 @@ void ApplyEulerMatrix(struct Vector3 *vector, float x, float y, float z)
   vector->y = cos(y) * sin(z) * vector->x + (sin(x) * sin(y) * sin(z) + cos(x) * cos(z)) * vector->y + (cos(x) * sin(y) * sin(z) - sin(x) * cos(z)) * vector->z;
   vector->z = -sin(y) * vector->x + sin(x) * cos(y) * vector->y + cos(x) * cos(y) * vector->z;
 }
+
 
 //===== PID =======
 float ApplyPID(float y, float yo, struct PIDSavings *savings, float pk, float ik, float dk, bool blockAbleWithHeight, float maxISum) {
@@ -725,6 +693,14 @@ float ApplyPID(float y, float yo, struct PIDSavings *savings, float pk, float ik
   return finalValue;
 }
 
+
+//===== Value Adjustment methods =====
+
+float roundToOneDecimal(float value)
+{
+  return roundf(value * 10.0) / 10.0; 
+}
+
 float minMaxTheValue(float maxV, float value)
 {
   value = value > maxV ? maxV : value;
@@ -733,7 +709,7 @@ float minMaxTheValue(float maxV, float value)
   return value;
 }
 
-float dampenWithAverage(float addValue, float *averageSum, float *finalValue)
+void dampenWithAverage(float addValue, double *averageSum, float *finalValue)
 {
   if (averageCounter < averageCounterMax)
   {
@@ -745,7 +721,5 @@ float dampenWithAverage(float addValue, float *averageSum, float *finalValue)
     *finalValue = *averageSum / averageCounterMax;
     averageSum = 0;
   }
-
-  return *finalValue;
 }
 
